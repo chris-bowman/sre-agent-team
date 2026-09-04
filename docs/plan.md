@@ -61,7 +61,7 @@ This checkpoint reflects the repo and deployment state as of 2026-09-04 and shou
 
 ### Still open / release-gated
 
-- **Caller administration and negative authorization**: Independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, and restart survival are validated. Disabled/revoked caller operations and live negative tests remain open.
+- **Caller administration and negative authorization**: Independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, restart survival, and live disabled/revoked caller operations are validated. Remaining live idempotency and severity-limit cases are open.
 - **Official MCP conformance**: Add official-client protocol coverage for negotiation, reconnect behavior, malformed requests, and all supported tool paths.
 - **Outage behavior**: Validate registry and Platform SRE Agent failures against readiness, retries, public errors, metrics, and alerts.
 - **Immutable image/release controls**: Complete; deployment resolves the pushed tag to a validated ACR digest, the base image is digest-pinned, and all runtime packages are exact-pinned.
@@ -355,7 +355,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P8.5 Check generated OpenAPI and schema compatibility.
 - [x] P8.6 Remove generated ARM JSON from source control; Bicep source is authoritative and templates are rebuilt during validation.
 - [x] P8.7 Add a staging end-to-end test with two independent caller identities. Overlapping WorkloadApp and WorkloadIsolation investigations completed on separate caller partitions on 2026-09-01, and a fresh simultaneous two-caller smoke passed after restoration on 2026-09-04.
-- [ ] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed; disabled/revoked caller and remaining live idempotency/severity cases are open.
+- [ ] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed. On 2026-09-04, a five-caller allowlist was activated; both workload agents completed positive-path escalations, WorkloadIsolation was denied while disabled and again after revoke, WorkloadApp remained authorized as the control, re-grant recovery succeeded, and all five callers were restored on healthy revision `sre-escalation-proxy--0000020`. Remaining live idempotency and severity-limit cases are open.
 - [ ] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts.
 - [x] P8.10 Verify Azure SRE Agent reference connector compatibility. The fresh WorkloadApp connector completed the create/status/findings lifecycle in staging on 2026-08-27.
 

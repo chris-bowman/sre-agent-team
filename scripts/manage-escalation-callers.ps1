@@ -167,10 +167,11 @@ function Set-CallerPolicies {
 
     if ($SkipPolicyUpdate) { return }
     $json = ConvertTo-Json -InputObject @($Policies) -Depth 10 -Compress
+    $escapedJson = $json.Replace('"', '\"')
     $arguments = @(
         'containerapp', 'update', '--name', $ProxyAppName,
         '--resource-group', $ResourceGroup,
-        '--set-env-vars', "CALLER_POLICIES_JSON=$json",
+        '--set-env-vars', "CALLER_POLICIES_JSON=$escapedJson",
         '--output', 'none'
     )
     if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {

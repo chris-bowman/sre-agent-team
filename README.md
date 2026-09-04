@@ -198,16 +198,66 @@ Run this **once per workload agent onboarded**. This compatibility wrapper grant
     -WorkloadName payments-api
 ```
 
-  For generic callers and lifecycle operations, use `manage-escalation-callers.ps1`:
+  For generic callers and lifecycle operations, use `manage-escalation-callers.ps1`.
+  Pass the proxy coordinates explicitly when deploy state is unavailable:
 
   ```powershell
-  .\scripts\manage-escalation-callers.ps1 -Operation List
-  .\scripts\manage-escalation-callers.ps1 -Operation Verify -CallerPrincipalId <OBJECT_ID>
-  .\scripts\manage-escalation-callers.ps1 -Operation Disable -CallerPrincipalId <OBJECT_ID> -WhatIf
-  .\scripts\manage-escalation-callers.ps1 -Operation Revoke -CallerPrincipalId <OBJECT_ID> -WhatIf
+  $proxy = @{
+    EntraAppId    = '<PROXY_ENTRA_CLIENT_ID>'
+    SubscriptionId = '<PLATFORM_SUBSCRIPTION_ID>'
+    ResourceGroup = '<PLATFORM_RESOURCE_GROUP>'
+    ProxyAppName  = '<PROXY_CONTAINER_APP_NAME>'
+  }
+
+  # Inventory every role assignment and policy entry.
+  .\scripts\manage-escalation-callers.ps1 -Operation List @proxy |
+    Format-Table display_name, appid, principal_id, role_assigned, policy_registered, enabled
+
+  # Grant and register a caller with explicit limits.
+  .\scripts\manage-escalation-callers.ps1 -Operation Grant @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>' `
+    -CallerDisplayName '<CALLER_NAME>' `
+    -MaximumSeverity high `
+    -MaximumConcurrentInvestigations 2
+
+  # Fail unless both the Entra role and caller policy authorize the caller.
+  .\scripts\manage-escalation-callers.ps1 -Operation Verify @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>'
   ```
 
-  `Disable` keeps the Entra assignment and denies the caller through policy. `Revoke` removes the assignment and retains a disabled policy tombstone so an empty allowlist cannot restore permissive behavior. Remove `-WhatIf` only after reviewing the target. A repeated `Grant` preserves an existing policy by default; use `-UpdateExistingPolicy` to re-enable it or change explicitly supplied limits.
+  Use `Disable` for a reversible policy-only suspension. Use `Revoke` to remove the
+  Entra role assignment and retain a disabled policy tombstone:
+
+  ```powershell
+  # Preview, apply, and verify a temporary suspension.
+  .\scripts\manage-escalation-callers.ps1 -Operation Disable @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>' -WhatIf
+  .\scripts\manage-escalation-callers.ps1 -Operation Disable @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>'
+
+  # Re-enable an existing disabled policy. Without this switch, Grant preserves it.
+  .\scripts\manage-escalation-callers.ps1 -Operation Grant @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>' `
+    -UpdateExistingPolicy
+
+  # Preview and apply full revocation.
+  .\scripts\manage-escalation-callers.ps1 -Operation Revoke @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>' -WhatIf
+  .\scripts\manage-escalation-callers.ps1 -Operation Revoke @proxy `
+    -CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>'
+  ```
+
+  After each mutation, run `List` and `Verify`, confirm `/health/ready` returns `200`,
+  and test one denied caller plus one unaffected authorized caller. A caller is authorized
+  only when it has both the `EscalationCaller` assignment and an enabled policy. An empty
+  policy enables compatibility-mode access for every role-assigned caller, so do not clear
+  `CALLER_POLICIES_JSON` as a revocation mechanism. Do not edit that environment variable
+  with a raw `az containerapp update` command on Windows; use the management script, which
+  handles Azure CLI JSON argument escaping and creates a new Container App revision safely.
+
+  Routine proxy deployments preserve the current caller policy. See
+  [escalation-proxy/README.md](escalation-proxy/README.md) for the complete operator runbook,
+  health checks, expected lifecycle states, and recovery guidance.
 
 ---
 
@@ -225,12 +275,21 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `PlatformAgentName` | No | `sre-platform` | Name of the platform SRE agent resource. |
 | `AcrName` | Yes | n/a | Azure Container Registry name used to build/push the proxy image. |
 | `ProxyAppName` | No | `sre-escalation-proxy` | Escalation proxy app/container name prefix. |
+| `RegistryBackend` | No | `table` | Investigation registry backend: production Azure Table Storage or local/test memory. |
+| `ProxyMinReplicas` | No | `1` | Minimum proxy Container App replicas. Use at least `2` for production. |
+| `ProxyMaxReplicas` | No | `5` | Maximum proxy Container App replicas; must be at least `ProxyMinReplicas`. |
+| `EnablePrivateNetworking` | No (switch) | Off | Deploys Container Apps VNet integration plus the Storage Table private endpoint and DNS path. |
+| `PrivateNetworkName` | No | `<ProxyAppName>-vnet` | Virtual network name when private networking is enabled. |
+| `PrivateNetworkAddressPrefix` | No | `10.42.0.0/16` | Address prefix for the private proxy virtual network. |
+| `ContainerEnvironmentSubnetPrefix` | No | `10.42.0.0/27` | Delegated Container Apps environment subnet prefix. |
+| `StoragePrivateEndpointSubnetPrefix` | No | `10.42.1.0/28` | Storage private endpoint subnet prefix. |
+| `McpEnableDnsRebindingProtection` | No | `true` | Controls MCP SDK DNS-rebinding protection. Disable only for a confirmed host-validation compatibility issue. |
 | `WorkloadSubscriptionId` | No | `PlatformSubscriptionId` | Subscription for workload phases. If omitted, uses platform subscription (single-subscription/lab pattern). |
 | `WorkloadResourceGroup` | No | `rg-sre-<WorkloadAgentName>` | Resource group for workload agent deployment. If omitted, generated from `WorkloadAgentName`. |
 | `WorkloadAgentName` | Conditional | `''` | Workload agent name. Required when `workload` or `grant` phase is included. |
 | `WorkloadDisplayName` | Conditional | `''` | Friendly display name passed to workload deployment. Required when `workload` or `grant` phase is included. |
 | `ScopedResourceGroups` | Conditional | `''` | Comma-separated workload resource groups used for workload scope configuration. Required when `workload` or `grant` phase is included. |
-| `Location` | No | `eastus2` | Azure region used for created resource groups/resources unless overridden by parameter files/templates. |
+| `Location` | No | `australiaeast` | Azure region used for created resource groups/resources unless overridden by parameter files/templates. |
 | `EnableApplicationInsights` | No (switch) | Off | Enables Application Insights wiring in platform/workload deployments. |
 | `Phases` | No | `platform,proxy,workload,grant` | Ordered subset of phases to run. Allowed values: `platform`, `proxy`, `workload`, `grant`. |
 | `ResetState` | No (switch) | Off | Deletes `scripts/.deploy-state.json` before execution. Useful for clean reruns. |
@@ -244,7 +303,7 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `SubscriptionId` | Yes | n/a | Platform subscription ID. Script sets active subscription to this value. |
 | `PlatformManagementGroupId` | No | `''` | Optional management group ID used when assigning platform scope access. Empty means subscription scope. |
 | `AgentName` | No | `sre-platform` | Platform agent resource name. |
-| `Location` | No | `eastus2` | Region used for resource group creation and deployment parameters. |
+| `Location` | No | `australiaeast` | Region used for resource group creation and deployment parameters. |
 | `EnableApplicationInsights` | No (switch) | Off | Enables Application Insights output/deployment path for platform agent. |
 | `SkipCustomAgentUpload` | No (switch) | Off | Skips upload of `platform/custom-agents/workload-liaison.yaml`. |
 | `SkipCurrentCallerAgentAdminAssignment` | No (switch) | Off | Skips assigning SRE Agent Administrator to the current caller on the deployed platform agent. |
@@ -259,9 +318,22 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `PlatformAgentEndpoint` | No | `''` (resolved from state) | Platform agent endpoint URL. If not provided, read from deploy state (`PlatformAgentEndpoint`). |
 | `AcrName` | Yes | n/a | ACR name used for `az acr build` and container image hosting. |
 | `ProxyAppName` | No | `sre-escalation-proxy` | Proxy app name; also influences image and identity naming. |
-| `Location` | No | `eastus2` | Deployment region for proxy infrastructure. |
+| `Location` | No | `australiaeast` | Deployment region for proxy infrastructure. |
 | `ImageTag` | No | UTC timestamp (`yyyyMMddHHmmss`) | Traceability tag used for the ACR build. Deployment resolves and uses the resulting immutable image digest; `latest` is rejected. |
+| `PipIndexUrl` | No | Microsoft corporate package proxy | HTTPS Python package feed passed to the container build. Do not include credentials in committed commands or files. |
+| `ProxyEntraAppId` | No | Existing matching app or new app | Stable proxy Entra application client ID. Pass explicitly when display-name lookup is unavailable or ambiguous. |
 | `CallerPoliciesJson` | No | Existing deployed value, then `''` | Explicit caller policy JSON. When omitted, routine deployment preserves the current Container App value. |
+| `McpAllowedHosts` | No | Proxy host plus localhost | Comma-separated MCP host allowlist configured after deployment. |
+| `MinReplicas` | No | `1` | Minimum Container App replicas. Use at least `2` for production. |
+| `MaxReplicas` | No | `5` | Maximum Container App replicas; must be at least `MinReplicas`. |
+| `LogRetentionDays` | No | `30` | Log Analytics retention in days (`30`-`730`). |
+| `RegistryBackend` | No | `table` | Investigation registry backend: `table` or `memory`. |
+| `EnablePrivateNetworking` | No (switch) | Off | Enables VNet integration, Table private endpoint, and private DNS deployment. |
+| `PrivateNetworkName` | No | `<ProxyAppName>-vnet` when enabled | Name of the private proxy virtual network. |
+| `PrivateNetworkAddressPrefix` | No | `10.42.0.0/16` | Address prefix for the private proxy virtual network. |
+| `ContainerEnvironmentSubnetPrefix` | No | `10.42.0.0/27` | Delegated Container Apps environment subnet prefix. |
+| `StoragePrivateEndpointSubnetPrefix` | No | `10.42.1.0/28` | Storage private endpoint subnet prefix. |
+| `McpEnableDnsRebindingProtection` | No | `true` | Controls MCP SDK DNS-rebinding protection. Disable only for a confirmed host-validation compatibility issue. |
 
 ### scripts/deploy-workload.ps1
 
@@ -275,10 +347,11 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `EscalationProxyEndpointUrl` | No | `''` (resolved from state) | Escalation proxy endpoint URL. If omitted, resolved from deploy state (`ProxyEndpointUrl`). |
 | `EscalationProxyEntraClientId` | No | `''` (resolved from state) | Proxy Entra app client ID. If omitted, resolved from deploy state (`ProxyEntraClientId`). |
 | `ParameterFile` | No | `workload/main.bicepparam` | Parameter file path used in workload Bicep deployment. |
-| `Location` | No | `eastus2` | Deployment location and RG creation region for workload resources. |
+| `Location` | No | `australiaeast` | Deployment location and RG creation region for workload resources. |
 | `EnableApplicationInsights` | No (switch) | Off | Enables Application Insights path for workload agent deployment. |
 | `SkipCustomAgentUpload` | No (switch) | Off | Skips upload of workload custom agent YAMLs. |
 | `SkipCurrentCallerAgentAdminAssignment` | No (switch) | Off | Skips assigning SRE Agent Administrator to the current caller on workload agent. |
+| `SkipConnectorMaterialization` | No (switch) | Off | Skips connector envelope synchronization and connected-state validation after deployment. |
 
 ### scripts/grant-workload-escalation.ps1
 

@@ -250,6 +250,7 @@ if ([string]::IsNullOrWhiteSpace($CallerPoliciesJson)) {
         Write-Host 'Preserving existing caller policy configuration.' -ForegroundColor Green
     }
 }
+$callerPoliciesParameterValue = $CallerPoliciesJson.Replace('"', '\"')
 
 $deployOutputJson = az deployment group create `
     --resource-group $ResourceGroup `
@@ -262,7 +263,7 @@ $deployOutputJson = az deployment group create `
         platformAgentEndpoint=$PlatformAgentEndpoint `
         tenantId=$tenantId `
         entraAppClientId=$entraAppId `
-        callerPoliciesJson=$CallerPoliciesJson `
+        callerPoliciesJson=$callerPoliciesParameterValue `
         revisionSuffix=$revisionSuffix `
         sreAgentAdminRoleDefinitionId=$sreAgentAdminRoleId `
         storageTableDataContributorRoleDefinitionId=$storageTableRoleId `

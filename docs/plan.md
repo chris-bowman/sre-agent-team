@@ -227,6 +227,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P5.10 Deploy immutable image tags or digests and pin runtime dependencies.
 - [x] P5.11 Separate runtime dependencies from development and test dependencies.
 - [x] P5.12 Add bounded retry with jitter, explicit timeouts, circuit-breaking behavior, and dependency-specific status mapping. ✅ Bounded retry, jitter, explicit timeouts, and safe 503 mapping are complete
+- [ ] P5.13 Move caller policy from `CALLER_POLICIES_JSON` to Azure App Configuration so grant, disable, revoke, severity, and quota changes do not create Container App revisions. Use managed identity and least-privilege data-plane RBAC, private networking, environment labels, validated atomic snapshot refresh, bounded propagation time, and last-known-good caching with fail-closed startup and maximum-staleness behavior. Preserve the independent `EscalationCaller` Entra app-role requirement, disabled revoke tombstones, optimistic concurrency for administration, and auditable policy history; remove revision-coupled policy writes only after migration and rollback compatibility are tested.
 
 ### WP5 Implementation Progress (2026-08-31)
 

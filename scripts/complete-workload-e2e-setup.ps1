@@ -12,6 +12,9 @@ param (
     [string] $ProxyEndpointUrl = 'https://sre-escalation-proxy.happyisland-89fe2a77.australiaeast.azurecontainerapps.io/mcp/',
     [string] $ProxyEntraClientId = '4c4797ca-bf0d-441f-aa2b-dc237e71d7c2',
     [string] $ProxyPrincipalId = '7de7f53c-39c1-41b4-883d-81063be6fcb6',
+    [string] $ProxySubscriptionId = '',
+    [string] $ProxyResourceGroup = 'platformsre-rg',
+    [string] $ProxyAppName = 'sre-escalation-proxy',
     [string] $WorkloadPrincipalId = '',
     [string] $WorkloadUamiPrincipalId = '751d96ae-084f-4079-a734-38faed60d1ef'
 )
@@ -20,6 +23,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot\common.ps1"
+
+$ProxySubscriptionId = Resolve-Value -Provided $ProxySubscriptionId -StateKey 'ProxySubscriptionId'
+if ([string]::IsNullOrWhiteSpace($ProxySubscriptionId)) { $ProxySubscriptionId = $SubscriptionId }
 
 $agentResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/agents/$AgentName"
 $connectorIdentity = "/subscriptions/$($SubscriptionId.ToLower())/resourcegroups/$($ResourceGroup.ToLower())/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$AgentName-id"
@@ -61,6 +67,9 @@ Write-Step 'Update deployment state'
 Set-DeployState -Key 'ProxyEndpointUrl' -Value $ProxyEndpointUrl
 Set-DeployState -Key 'ProxyEntraClientId' -Value $ProxyEntraClientId
 Set-DeployState -Key 'ProxyPrincipalId' -Value $ProxyPrincipalId
+Set-DeployState -Key 'ProxySubscriptionId' -Value $ProxySubscriptionId
+Set-DeployState -Key 'ProxyResourceGroup' -Value $ProxyResourceGroup
+Set-DeployState -Key 'ProxyAppName' -Value $ProxyAppName
 Set-DeployState -Key 'WorkloadAgentName' -Value $AgentName
 Set-DeployState -Key 'WorkloadAgentId' -Value $agentResourceId
 Set-DeployState -Key 'WorkloadAgentPrincipal' -Value $WorkloadPrincipalId
@@ -71,7 +80,10 @@ Write-Step 'Grant EscalationCaller app role to workload identities'
 & "$PSScriptRoot\grant-workload-escalation.ps1" `
     -WorkloadPrincipalId $WorkloadUamiPrincipalId `
     -EntraAppId $ProxyEntraClientId `
-    -WorkloadName $AgentName
+    -WorkloadName $AgentName `
+    -SubscriptionId $ProxySubscriptionId `
+    -ResourceGroup $ProxyResourceGroup `
+    -ProxyAppName $ProxyAppName
 
 Write-Step 'Refresh MCP connector envelope'
 Sync-McpConnectorEnvelope `

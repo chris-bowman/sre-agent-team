@@ -217,7 +217,7 @@ Do not start production networking or repository-wide terminology changes before
 
 - [ ] P5.1 Split Entra application bootstrap from routine proxy deployment.
 - [x] P5.2 Make deployment reuse a stable proxy application client ID when supplied or uniquely discoverable.
-- [ ] P5.3 Add idempotent grant, list, verify, disable, and revoke operations for same-tenant callers.
+- [x] P5.3 Add idempotent grant, list, verify, disable, and revoke operations for same-tenant callers. The operator command synchronizes Entra app-role assignments with caller policy, bootstraps existing grants before enabling allowlist mode, supports `-WhatIf`, and preserves policy across redeployment.
 - [ ] P5.4 Retain workload-oriented parameter aliases during the compatibility window.
 - [x] **P5.5 Add a production profile with VNet-integrated Container Apps, Storage private endpoint, and private DNS. (2026-08-31)**
 - [x] **P5.6 Disable Storage public network access in production mode. (2026-08-31 — enforced by tenant policy)**
@@ -246,7 +246,7 @@ Do not start production networking or repository-wide terminology changes before
 - Caller-scoped idempotency keys and request fingerprints are persisted in both registry implementations; matching retries replay the existing investigation and conflicting payloads are rejected.
 - Both registry backends now reserve a caller slot before Platform SRE thread creation, finalize it after success, and release it on failure. The memory backend protects admission with a lock, while the Table backend uses a per-caller transaction counter.
 - The Table backend now uses a per-caller quota counter and same-partition transaction to atomically increment the counter while creating a reservation. Live private-Storage concurrency validation remains a release-gate test.
-- `CALLER_POLICIES_JSON` now supports operator-owned same-tenant caller registration by validated app ID, including enabled state, severity ceiling, and concurrent quota. Empty configuration preserves local development behavior; persistent policy administration remains open.
+- `CALLER_POLICIES_JSON` supports operator-owned same-tenant caller registration by validated app ID, including enabled state, severity ceiling, and concurrent quota. Empty configuration preserves local development behavior; `manage-escalation-callers.ps1` persists policy changes on the Container App and routine deployment preserves the current value.
 - The v1 HTTP lifecycle routes are implemented and tested for create, status, findings, bounded polling, canonical response envelopes, and incomplete findings handling.
 - Versioned HTTP failures now return stable `application/problem+json` responses with safe error codes, correlation IDs, and retryability; legacy and MCP error behavior remain unchanged.
 - Checkpoint verification: 38 tests passed, Bicep compilation passed, PowerShell deployment-script parsing passed, and editor diagnostics are clean.

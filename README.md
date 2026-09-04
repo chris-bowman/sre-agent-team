@@ -183,7 +183,7 @@ uploads `workload/custom-agents/platform-escalation.yaml`.
 
 ### 4. Platform team: Grant escalation access
 
-Run this **once per workload agent onboarded**:
+Run this **once per workload agent onboarded**. This compatibility wrapper grants the Entra role and registers enabled caller policies for the workload's user-assigned and distinct system-assigned identities:
 
 ```powershell
 .\scripts\grant-workload-escalation.ps1 -WorkloadName payments-api
@@ -197,6 +197,17 @@ Run this **once per workload agent onboarded**:
     -EntraAppId <PROXY_ENTRA_CLIENT_ID> `
     -WorkloadName payments-api
 ```
+
+  For generic callers and lifecycle operations, use `manage-escalation-callers.ps1`:
+
+  ```powershell
+  .\scripts\manage-escalation-callers.ps1 -Operation List
+  .\scripts\manage-escalation-callers.ps1 -Operation Verify -CallerPrincipalId <OBJECT_ID>
+  .\scripts\manage-escalation-callers.ps1 -Operation Disable -CallerPrincipalId <OBJECT_ID> -WhatIf
+  .\scripts\manage-escalation-callers.ps1 -Operation Revoke -CallerPrincipalId <OBJECT_ID> -WhatIf
+  ```
+
+  `Disable` keeps the Entra assignment and denies the caller through policy. `Revoke` removes the assignment and retains a disabled policy tombstone so an empty allowlist cannot restore permissive behavior. Remove `-WhatIf` only after reviewing the target. A repeated `Grant` preserves an existing policy by default; use `-UpdateExistingPolicy` to re-enable it or change explicitly supplied limits.
 
 ---
 
@@ -250,6 +261,7 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `ProxyAppName` | No | `sre-escalation-proxy` | Proxy app name; also influences image and identity naming. |
 | `Location` | No | `eastus2` | Deployment region for proxy infrastructure. |
 | `ImageTag` | No | UTC timestamp (`yyyyMMddHHmmss`) | Traceability tag used for the ACR build. Deployment resolves and uses the resulting immutable image digest; `latest` is rejected. |
+| `CallerPoliciesJson` | No | Existing deployed value, then `''` | Explicit caller policy JSON. When omitted, routine deployment preserves the current Container App value. |
 
 ### scripts/deploy-workload.ps1
 
@@ -274,7 +286,30 @@ The tables below document every parameter accepted by the deployment scripts in 
 |---|---|---|---|
 | `WorkloadPrincipalId` | No | `''` (resolved from state) | Workload agent managed identity object ID. If omitted, resolved from state (`WorkloadAgentUamiPrincipal`, then legacy `WorkloadAgentPrincipal`). |
 | `EntraAppId` | No | `''` (resolved from state) | Escalation proxy Entra app client ID. If omitted, resolved from state (`ProxyEntraClientId`). |
-| `WorkloadName` | No | `''` (resolved from state/fallback `unknown`) | Display/logging label for onboarding message output. |
+| `WorkloadName` | No | Caller service-principal display name | Operator-owned policy label for onboarded workload identities. |
+| `SubscriptionId` | No | `''` (resolved from state/current CLI context) | Subscription containing the proxy. If omitted, resolved from state (`ProxySubscriptionId`). |
+| `ResourceGroup` | No | `''` (resolved from state) | Platform resource group containing the proxy; required to register caller policy. |
+| `ProxyAppName` | No | `''` (resolved from state) | Container App name; required to register caller policy. |
+| `MaximumSeverity` | No | `critical` | Maximum severity the caller may request. |
+| `MaximumConcurrentInvestigations` | No | `10` | Per-caller concurrent investigation quota. |
+| `UpdateExistingPolicy` | No (switch) | Off | Re-enables an existing policy and updates only explicitly supplied policy fields. |
+| `SkipPolicyUpdate` | No (switch) | Off | Explicit compatibility escape hatch for role-only grants. Without it, missing proxy coordinates fail closed. |
+
+### scripts/manage-escalation-callers.ps1
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `Operation` | No | `List` | One of `Grant`, `List`, `Verify`, `Disable`, or `Revoke`. |
+| `CallerPrincipalId` | Conditional | `''` (resolved from workload state) | Caller service-principal object ID; required except for `List`. Alias: `WorkloadPrincipalId`. |
+| `CallerDisplayName` | No | Service-principal display name | Operator-owned policy label. Alias: `WorkloadName`. |
+| `EntraAppId` | No | `''` (resolved from state) | Escalation proxy Entra application client ID. |
+| `SubscriptionId` | No | Current Azure CLI subscription | Subscription containing the proxy Container App. |
+| `ResourceGroup` | No | `''` (resolved from state) | Platform resource group containing the proxy. |
+| `ProxyAppName` | No | `''` (resolved from state) | Proxy Container App name. |
+| `MaximumSeverity` | No | `critical` | Policy ceiling used by `Grant`. |
+| `MaximumConcurrentInvestigations` | No | `10` | Policy quota used by `Grant`. |
+| `UpdateExistingPolicy` | No (switch) | Off | Re-enables an existing policy and updates only explicitly supplied policy fields during `Grant`. |
+| `SkipPolicyUpdate` | No (switch) | Off | Compatibility escape hatch that manages only the Entra assignment. |
 
 ### Parameter interactions and state behavior
 

@@ -52,13 +52,20 @@ counting, and atomic status-poll updates.
 
 ## Onboarding a new caller
 
-When a new same-tenant application caller is approved, the platform team grants its service principal the `EscalationCaller` app role:
+Use the generic administration command for same-tenant callers:
 
 ```powershell
-\.\scripts\grant-workload-escalation.ps1 -WorkloadPrincipalId "<caller-service-principal-object-id>" -EntraAppId "<proxy-entra-app-client-id>"
+.\scripts\manage-escalation-callers.ps1 `
+	-Operation Grant `
+	-CallerPrincipalId "<caller-service-principal-object-id>" `
+	-CallerDisplayName "<caller-name>" `
+	-MaximumSeverity high `
+	-MaximumConcurrentInvestigations 2
 ```
 
-The existing script name and parameter are retained for compatibility; the target principal can be any approved caller service principal.
+`List` inventories Entra assignments and policy state, while `Verify` fails unless the caller is currently authorized. `Disable` retains the Entra assignment but sets the caller policy to disabled. `Revoke` removes the assignment and retains a disabled policy tombstone so the allowlist cannot become empty and permissive. All mutating operations support `-WhatIf`.
+
+The first managed grant bootstraps enabled policy entries for every existing `EscalationCaller` assignment before allowlist mode begins, avoiding lockout of previously approved callers. Repeated grants preserve existing policy state and limits; pass `-UpdateExistingPolicy` to re-enable a caller or change explicitly supplied fields. Routine proxy deployments preserve `CALLER_POLICIES_JSON`. The existing `grant-workload-escalation.ps1` name and workload-oriented parameters remain as a dual-identity compatibility wrapper. Role-only operation requires an explicit `-SkipPolicyUpdate`.
 
 The proxy Entra application is bootstrapped once and reused on later deployments. Pass its stable client ID to routine deployments with `-ProxyEntraAppId`.
 

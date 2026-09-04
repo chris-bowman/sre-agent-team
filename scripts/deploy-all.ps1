@@ -155,7 +155,11 @@ if ($Phases -contains 'grant') {
     & $banner 'PHASE 4/4 — Grant EscalationCaller app role'
     # Platform subscription context is required for the Entra/Graph call.
     az account set --subscription $PlatformSubscriptionId | Out-Null
-    $null = & "$PSScriptRoot\grant-workload-escalation.ps1" -WorkloadName $WorkloadAgentName
+    $null = & "$PSScriptRoot\grant-workload-escalation.ps1" `
+        -WorkloadName $WorkloadAgentName `
+        -SubscriptionId $PlatformSubscriptionId `
+        -ResourceGroup $PlatformResourceGroup `
+        -ProxyAppName $ProxyAppName
 
     if ($Phases -contains 'workload') {
         & $banner 'FINALIZATION — Refresh and wait for MCP connector'

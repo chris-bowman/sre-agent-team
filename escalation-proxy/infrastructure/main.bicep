@@ -33,6 +33,10 @@ param tenantId string = tenant().tenantId
 @description('Entra app registration client ID for the proxy (created before deployment).')
 param entraAppClientId string
 
+@secure()
+@description('Operator-managed same-tenant caller policies serialized as JSON.')
+param callerPoliciesJson string = ''
+
 @description('Role definition GUID for the built-in "SRE Agent Administrator" role. Resolve at deploy time with: az role definition list --name "SRE Agent Administrator" --query "[0].name" -o tsv. deploy-escalation-proxy.ps1 passes this automatically.')
 param sreAgentAdminRoleDefinitionId string
 
@@ -322,6 +326,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ENTRA_TENANT_ID', value: tenantId }
             { name: 'ENTRA_CLIENT_ID', value: entraAppClientId }
             { name: 'AZURE_CLIENT_ID', value: proxyUami.properties.clientId }
+            { name: 'CALLER_POLICIES_JSON', value: callerPoliciesJson }
             { name: 'REGISTRY_BACKEND', value: registryBackend }
             { name: 'REGISTRY_TABLE_ENDPOINT', value: registryBackend == 'table' ? 'https://${registryStorage.name}.table.${environment().suffixes.storage}' : '' }
             { name: 'REGISTRY_TABLE_NAME', value: 'InvestigationRegistry' }

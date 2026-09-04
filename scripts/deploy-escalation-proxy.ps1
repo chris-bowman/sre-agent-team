@@ -21,6 +21,7 @@ param (
     [string] $ImageTag = '',
     [string] $PipIndexUrl = 'https://packagefeedproxy.microsoft.io/pypi/simple/',
     [string] $ProxyEntraAppId = '',
+    [string] $CallerPoliciesJson = '',
     [string] $McpAllowedHosts = '',
     [ValidateRange(1, 100)] [int] $MinReplicas = 1,
     [ValidateRange(1, 100)] [int] $MaxReplicas = 5,
@@ -235,6 +236,21 @@ if ($RegistryBackend -eq 'table') {
 }
 
 Write-Host "`n=== Step 6: Deploy escalation proxy Container App ===" -ForegroundColor Cyan
+if ([string]::IsNullOrWhiteSpace($CallerPoliciesJson)) {
+    $existingCallerPolicies = az containerapp list `
+        --resource-group $ResourceGroup `
+        --subscription $SubscriptionId `
+        --query "[?name=='$ProxyAppName'] | [0].properties.template.containers[0].env[?name=='CALLER_POLICIES_JSON'].value | [0]" `
+        --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to inspect the existing proxy caller policy before deployment.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($existingCallerPolicies)) {
+        $CallerPoliciesJson = $existingCallerPolicies
+        Write-Host 'Preserving existing caller policy configuration.' -ForegroundColor Green
+    }
+}
+
 $deployOutputJson = az deployment group create `
     --resource-group $ResourceGroup `
     --template-file "$PSScriptRoot\..\escalation-proxy\infrastructure\main.bicep" `
@@ -246,6 +262,7 @@ $deployOutputJson = az deployment group create `
         platformAgentEndpoint=$PlatformAgentEndpoint `
         tenantId=$tenantId `
         entraAppClientId=$entraAppId `
+        callerPoliciesJson=$CallerPoliciesJson `
         revisionSuffix=$revisionSuffix `
         sreAgentAdminRoleDefinitionId=$sreAgentAdminRoleId `
         storageTableDataContributorRoleDefinitionId=$storageTableRoleId `
@@ -305,6 +322,9 @@ Write-Host "`n=== Deployment complete ===" -ForegroundColor Green
 Set-DeployState -Key 'ProxyEndpointUrl'    -Value $proxyEndpointUrl
 Set-DeployState -Key 'ProxyEntraClientId'  -Value $entraAppId
 Set-DeployState -Key 'ProxyPrincipalId'    -Value $proxyPrincipalId
+Set-DeployState -Key 'ProxySubscriptionId' -Value $SubscriptionId
+Set-DeployState -Key 'ProxyResourceGroup'  -Value $ResourceGroup
+Set-DeployState -Key 'ProxyAppName'        -Value $ProxyAppName
 Set-DeployState -Key 'ProxyImageDigest'    -Value $imageDigest
 Set-DeployState -Key 'ProxyImageReference' -Value $containerImage
 

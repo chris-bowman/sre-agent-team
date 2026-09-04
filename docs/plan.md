@@ -1,0 +1,422 @@
+# Open Platform Escalation Service Implementation Plan
+
+## Status
+
+- Overall: Production Table-backed platform restored after the overnight shutdown; two-caller isolation and complete lifecycle validated
+- Current work package: WP2/WP8 release hardening - MCP conformance and security automation
+- Last updated: 2026-09-04
+- Primary product: Platform SRE Agent and least-privilege escalation proxy
+- Reference consumer: Workload SRE Agent
+- Normative v1 contract: [service-contract-v1.md](service-contract-v1.md)
+
+## Session checkpoint and continuation plan
+
+**Checkpoint date: 2026-09-04**
+
+This checkpoint reflects the repo and deployment state as of 2026-09-04 and should be used as the handoff point for future sessions.
+
+### Overnight restoration and functional validation (2026-09-04)
+
+- Restored the Bicep-owned NAT gateway, static public IP, and Storage Table private endpoint without replacing the SRE agents, resetting deployment state, or changing the stable proxy Entra client ID `4c4797ca-bf0d-441f-aa2b-dc237e71d7c2`.
+- Proxy image `acrsrelabjplayn.azurecr.io/sre-escalation-proxy:p510-20260904-02` resolved and deployed as `acrsrelabjplayn.azurecr.io/sre-escalation-proxy@sha256:b22a4561f47751f5126634c0ee889f490e3981a03b74e468966bfb8ca25bc064`. The Python base image and complete runtime dependency graph are also digest/version pinned. The revision is healthy with two ready replicas; liveness and readiness return `200`.
+- The immutable redeployment preserved proxy Entra client ID `4c4797ca-bf0d-441f-aa2b-dc237e71d7c2`, app role ID `f0d9990a-554c-4556-a743-4e16d842dfe9`, five existing caller grants, and both healthy three-tool connectors. Deployment state now records `ProxyImageDigest` and `ProxyImageReference`.
+- The escalation service runtime is Azure Container Apps. The separate shared demo cluster `aks-srelab` is not part of this service path and remains intentionally stopped for cost control.
+- Storage public access remains disabled. The Table private endpoint is approved, private DNS is linked, and the restored NAT/public-IP egress path is provisioned.
+- Refreshed `platform-escalation-mi` on both WorkloadApp and WorkloadIsolation after the proxy restoration. Both connectors are `Connected`, healthy, expose three tools, and report zero consecutive ping failures.
+- Fresh simultaneous caller smoke passed. WorkloadApp investigation `8eee83d2-1e05-4e57-93d3-13e8887c6091` and WorkloadIsolation investigation `d48e05ab-2d0e-4ca1-97f5-247ced55009c` both completed. Proxy audit events recorded `summary_status=completed`, `summary_selection=best_structured_message`, HTTP `200`, and required finalization token `ESCALATION_FINAL_V1` for both investigations.
+- The workload-facing final reports intentionally omit the consumed finalization token; proxy audit events and MCP results are the authoritative completion evidence.
+- No matching Table, ETag, quota, storage, `ERROR`, or `Traceback` events were observed in the restored revision logs.
+- Validation remains green: 58 proxy tests, 8 PowerShell parses, and 6 Bicep builds.
+- Repository cleanup removed regenerable ARM JSON and transient test/build artifacts, archived the completed Phase 0 security summary and presentation script under `docs/archive`, and updated ignore rules. Bicep source remains authoritative for generated ARM templates. Git is initialized on branch `main`; no initial commit has been created.
+
+### Fresh deployment validation (2026-09-01)
+
+- Recreated `platformsre-rg` and `workload-rg` in `australiaeast` after both groups were cleaned.
+- Platform agent: `https://sre-platform--6514b06f.ba56c019.australiaeast.azuresre.ai`.
+- Private Table-backed proxy: `https://sre-escalation-proxy.happyisland-89fe2a77.australiaeast.azurecontainerapps.io/mcp/`.
+- Workload agent: `https://workloadapp--317fd7c5.81d8f7bf.australiaeast.azuresre.ai`.
+- Proxy revision `sre-escalation-proxy--0000006` is healthy with `minReplicas=2`, `maxReplicas=2`; both replicas are ready and liveness and readiness probes return `200`.
+- Storage public access is disabled; the Table private endpoint is approved and the private DNS/VNet link is active.
+- Both workload identities have `EscalationCaller`; `platform-escalation-mi` is `Connected`, healthy, and exposes all three tools.
+- Workload smoke test investigation `86f59f3b-952b-47f8-b0d9-8763d38a2578` completed end to end through the private Table-backed proxy. The proxy created platform thread `bfb2b8f1-b7d3-42dc-97d7-3db12d61c7e1`, observed the lifecycle transition from `running` to `completed`, and returned a structured summary with `FINALIZATION_TOKEN: ESCALATION_FINAL_V1`.
+- Two-replica investigation `879e0efe-58b2-441e-9397-f395ca542b82` validated shared Table state across replicas: reservation and thread creation were handled by replica `...-gq7g6`, status polling was served by both replicas, and summary retrieval returned `ESCALATION_FINAL_V1`. No Table, ETag, quota, or application errors were observed. Restart survival remains pending because the investigation completed before a targeted restart could be proven.
+- Restart-survival investigation `9d03c7fd-0629-4829-826e-49a6771ca9a0` remained `running` across a supported rolling revision restart at `01:07:53Z`. Both original replicas were replaced, polling continued on both replacements, status reached `completed` at `01:12:00Z`, and summary retrieval returned `ESCALATION_FINAL_V1` at `01:12:12Z`. No matching Table, ETag, storage, quota, or application errors were observed.
+- Quota-one validation exposed a terminal lifecycle defect: completed investigations remained `active`, so persisted quota counters were not decremented. Terminal completion now atomically marks the Table row terminal and releases its slot; status-first and finalized-summary-first paths are idempotent. Admission also reconciles a rejecting counter from authoritative unexpired `reserved` and `active` rows.
+- Repair image `acrsrelabjplayn.azurecr.io/sre-escalation-proxy:quota-release-20260901-01` has digest `sha256:f6768a8cf4199e91f687d8ac039a80cfc6a2895801c07b223287c90b219d290c`. Current image `acrsrelabjplayn.azurecr.io/sre-escalation-proxy:quota-reconcile-20260901-01` has digest `sha256:5ec83102ae99f1ac0f80dfb0d4744cb43c7edfe4fb563cbc434c5a289a74bfe8`.
+- Under a temporary WorkloadApp quota of one, investigation `ee397bee-e8c2-487c-a6d4-ca79287ba9c0` was admitted while an overlapping request was rejected with `429`. The admitted investigation reached `completed` and returned `ESCALATION_FINAL_V1`.
+- Post-completion investigation `22e412bd-7eb3-4338-bbbb-e5b818f1d074` was admitted, proving the terminal slot was reusable. Reservation and creation ran on one replica, polling crossed both replicas, completion was observed on the other replica, and the finalized summary returned `ESCALATION_FINAL_V1`. No matching lifecycle failures were observed.
+- The temporary `CALLER_POLICIES_JSON` override was removed. Revision `sre-escalation-proxy--0000006` is latest and latest-ready, `Healthy`, and `RunningAtMaxScale` with two ready replicas; Table mode and the repaired image are unchanged. The WorkloadApp connector is `Connected`, healthy, exposes three tools, and reports zero consecutive ping failures.
+- Validation passed: 58 proxy tests, 8 PowerShell parses, and 6 Bicep builds.
+
+### ✅ Recently Completed (2026-08-31)
+
+- **Production Table-backed proxy deployment succeeded**: Private networking, storage account, Container App, and health probes all operational.
+  - Container App: `sre-escalation-proxy` at `https://sre-escalation-proxy.blackglacier-ad0e7130.australiaeast.azurecontainerapps.io`
+  - Storage: `sreocoxujof5ynqsregistry` with private endpoint, private DNS, and isolated VNet
+  - Health: `/health/live` (200), `/health/ready` (200) — confirms Table backend initialized and accessible
+  - Logs: Clean startup, liveness probes every 25–30s, no initialization errors
+- **Private networking fully configured**: VNet (10.42.0.0/16), Container Apps subnet (10.42.0.0/27), Storage PE subnet (10.42.1.0/28), NAT Gateway, private DNS zone
+- **Production deployment path validated**: Bicep, Azure RBAC, private endpoint provisioning, and Storage SDK initialization all working under policy-restricted storage account
+
+### Still open / release-gated
+
+- **Caller administration and negative authorization**: Independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, and restart survival are validated. Disabled/revoked caller operations and live negative tests remain open.
+- **Official MCP conformance**: Add official-client protocol coverage for negotiation, reconnect behavior, malformed requests, and all supported tool paths.
+- **Outage behavior**: Validate registry and Platform SRE Agent failures against readiness, retries, public errors, metrics, and alerts.
+- **Immutable image/release controls**: Complete; deployment resolves the pushed tag to a validated ACR digest, the base image is digest-pinned, and all runtime packages are exact-pinned.
+- **Repository governance files and CI/security checks**: License, contributor guide, release policy, image scanning, CI workflow remain open
+
+### Highest-priority next actions for the next session
+
+1. **Official MCP conformance (P2.7)**: Add SDK-client coverage for protocol negotiation, discovery, all tool calls, malformed requests, errors, and reconnect behavior.
+2. **Security/release automation (P8.1/P8.4)**: Add formatting, linting, typing, dependency/security checks, and container image scanning to CI.
+3. **Caller operations and outage gates (P5.3/P8.9)**: Implement idempotent caller administration, then test disabled/revoked callers and dependency outages.
+4. **Repository governance (P7.8)**: Add owner-selected license, contribution, security, code-of-conduct, and changelog files before release.
+
+### Working assumptions for future work
+
+- The platform service remains the primary product; the workload SRE Agent remains a reference consumer example.
+- Azure Table Storage is actively deployed and validated for same-caller quota rejection, terminal slot reuse, cross-replica lifecycle access, restart safety, simultaneous independent callers, and reciprocal cross-caller denial.
+- Future work should address official-client conformance, security automation, caller administration, outage testing, and the reviewed repository cleanup candidates.
+
+## Objective
+
+Reposition this repository around the Platform SRE Agent and its escalation proxy as a reusable platform service. The proxy provides a narrow, secured investigation path for external agents without granting them direct administrative access to the Platform SRE Agent.
+
+The first supported caller boundary is same-tenant Microsoft Entra application identities. Standards-compliant MCP Streamable HTTP and a versioned asynchronous HTTP API are both supported public contracts backed by the same authorization and investigation service layer.
+
+## Execution Strategy
+
+Deliver the roadmap as eight reviewable work packages:
+
+1. WP1-WP3 establish the public contract and portable transports.
+2. WP4-WP6 harden state, deployment, and the findings boundary.
+3. WP7 repositions the repository and adds generic examples.
+4. WP8 provides the release gate.
+
+Do not start production networking or repository-wide terminology changes before the shared contract and transport architecture are merged.
+
+## Scope Decisions
+
+- Same-tenant service identities are the v1 caller boundary.
+- Delegated-user tokens, anonymous callers, and cross-tenant callers are excluded from v1.
+- Standards-compliant MCP Streamable HTTP and versioned asynchronous HTTP are both supported contracts.
+- The proxy remains investigation-only: create, follow status, and retrieve findings.
+- Remediation, mutation, broad SRE Agent administration, and direct platform-agent access are excluded.
+- Azure Table Storage remains the initial production registry, but only with working private networking and atomic concurrency semantics.
+- The workload SRE Agent remains a reference consumer, not a required platform component.
+- Existing MCP tool names and HTTP routes receive a compatibility window while v1 contracts are introduced.
+
+## Review Findings
+
+### Release Blockers
+
+1. `/mcp` is currently a hand-built JSON-RPC subset tailored to the Azure SRE Agent connector rather than a standards-compliant Streamable HTTP transport.
+2. `scripts/deploy-escalation-proxy.ps1` creates a new Entra application registration on every deployment, changing the token audience and invalidating existing onboarding.
+3. The Table registry has no private network path, while the memory fallback permits multiple replicas and loses state on restart.
+4. Authorization is only an app-role grant plus caller-supplied `workload_name`; no operator-owned caller policy exists.
+
+### High-Priority Hardening
+
+1. MCP validates a token and then decodes it again without signature verification for dispatch.
+2. Table quota enforcement is check-then-create rather than atomic, and creation has no idempotency key.
+3. Registry expiry cleanup only runs at process startup and scans the table.
+4. Health endpoints do not verify registry or Platform SRE Agent dependencies.
+5. Only the summary response is versioned; lifecycle responses and errors are not stable public contracts.
+6. Findings are selected heuristically from free-form output and scrubbed with regular expressions.
+7. Runtime dependencies are open-ended minimum versions, test dependencies ship in the image, and deployments use mutable image tags.
+
+### Repository Positioning Gaps
+
+1. Top-level documentation presents a two-tier workload/platform solution rather than a platform service plus reference consumer.
+2. Consumer onboarding is named and implemented only for workload SRE agents.
+3. The platform liaison contains fixed ALZ assumptions that are not universal service behavior.
+4. The repository has no license, contribution guide, security policy, code of conduct, changelog policy, or CI workflow.
+5. Existing documentation contains stale validation, implementation, telemetry, and polling statements.
+
+## WP1: Define the Supported Service Contract
+
+**Goal:** Establish the product boundary and one versioned contract before runtime refactoring.
+
+- [x] P1.1 Document the v1 product boundary and support matrix.
+- [x] P1.2 Define shared request, lifecycle, findings, and problem-detail schemas.
+- [x] P1.3 Define stable schemas and error semantics for the three existing MCP tools.
+- [x] P1.4 Define `/api/v1` HTTP routes and one-release compatibility behavior for current routes.
+- [x] P1.5 Define an operator-owned caller registration model keyed by validated Entra `appid`.
+
+### WP1 Acceptance Criteria
+
+- The Platform SRE Agent remains explicitly privileged and admin-only.
+- Caller-provided workload or team labels are documented as untrusted display metadata, never authorization identity.
+- Contracts include schema version, investigation ID, lifecycle status, timestamps, expiry, correlation ID, polling guidance, findings, and standard errors.
+- Caller policy includes enabled state, display name, severity ceiling, concurrent quota, and audit metadata.
+- Existing tool names remain `create_platform_investigation`, `get_investigation_status`, and `get_investigation_summary`.
+
+## WP2: Isolate Domain Logic and Replace the MCP Transport
+
+**Goal:** Make MCP portable while preventing authorization drift between transports.
+
+- [x] P2.1 Extract configuration and shared domain models from `escalation-proxy/app/main.py`.
+- [ ] P2.2 Extract token validation and caller-policy enforcement.
+- [ ] P2.3 Extract investigation lifecycle, registry, Platform SRE Agent client, output validation, and audit events.
+- [x] P2.4 Route MCP and HTTP through the same existing domain implementation methods.
+- [x] P2.5 Replace the hand-written MCP dispatcher with the pinned official Python MCP SDK Streamable HTTP transport.
+- [x] P2.6 Carry the verified caller identity through dispatch without unverified token decoding.
+- [ ] P2.7 Add official-client MCP conformance tests and Azure SRE connector regression coverage.
+
+### WP2 Acceptance Criteria
+
+- MCP supports protocol negotiation, notifications, content negotiation, reconnect behavior, and standards-compatible errors.
+- Only the three escalation tools are exposed.
+- Signature, tenant, issuer, audience, app-only token shape, role, application ID, and object ID are validated once and reused.
+- Tests cover initialize, tools/list, all tools/call paths, malformed requests, invalid authorization, unknown methods, and unknown tools.
+
+## WP3: Stabilize the Asynchronous HTTP API
+
+**Goal:** Provide a framework-neutral integration contract alongside MCP.
+
+- [x] P3.1 Implement versioned HTTP endpoints over the shared domain service.
+- [x] P3.2 Return typed creation, status, findings, and problem-detail responses.
+- [x] P3.3 Add `Retry-After` or `poll_after_seconds` guidance.
+- [x] P3.4 Add caller-scoped idempotency keys to investigation creation.
+- [x] P3.5 Retain current routes as deprecated compatibility wrappers for one release.
+- [x] P3.6 Publish generated OpenAPI and a same-tenant consumer guide.
+
+### WP3 Acceptance Criteria
+
+- Duplicate creation retries return the original investigation.
+- Public errors contain no internal exception text.
+- HTTP examples cover managed identity and client credentials without tenant-specific IDs or secrets.
+- Versioning and deprecation behavior are documented.
+
+## WP4: Make Persistence and Scaling Safe
+
+**Goal:** Preserve ownership, quotas, and investigation state under concurrency, restart, and scale-out.
+
+- [ ] P4.1 Extend registry records with idempotency, caller-policy snapshot, lifecycle timestamps, and structured-findings metadata.
+- [x] P4.2 Make quota check and creation atomic using conditional writes, transactions, or a per-caller counter record.
+- [x] P4.3 Add bounded continuous expiry cleanup without full-table startup scans.
+- [ ] P4.4 Define separate retention settings for active metadata, final findings, and audit telemetry.
+- [x] P4.5 Restrict memory mode to local development and one replica.
+- [x] P4.6 Add separate liveness and dependency-aware readiness endpoints.
+- [x] P4.7 Configure Container Apps probes for the new health model.
+- [x] **P4.8 (2026-08-31) Deploy production Table infrastructure with private networking and validate single-replica initialization.**
+
+### WP4 Acceptance Criteria
+
+- ✅ Single-replica Table initialization and health checks validated
+- ✅ Table mode preserves shared investigation state across multiple replicas and a rolling revision restart.
+- ✅ Memory mode is visibly non-production and cannot scale beyond one replica.
+- ✅ Readiness checks registry access and a bounded platform authentication/connectivity operation.
+- ✅ Concurrent callers cannot exceed their configured quota, while independent caller partitions admit overlapping work.
+
+## WP5: Secure and Repeatably Deploy the Platform Service
+
+**Goal:** Preserve the service identity and operate safely in policy-restricted Azure environments.
+
+- [ ] P5.1 Split Entra application bootstrap from routine proxy deployment.
+- [x] P5.2 Make deployment reuse a stable proxy application client ID when supplied or uniquely discoverable.
+- [ ] P5.3 Add idempotent grant, list, verify, disable, and revoke operations for same-tenant callers.
+- [ ] P5.4 Retain workload-oriented parameter aliases during the compatibility window.
+- [x] **P5.5 Add a production profile with VNet-integrated Container Apps, Storage private endpoint, and private DNS. (2026-08-31)**
+- [x] **P5.6 Disable Storage public network access in production mode. (2026-08-31 — enforced by tenant policy)**
+- [ ] P5.7 Document required Entra and Platform SRE Agent egress/DNS paths.
+- [x] P5.8 Parameterize limits, retention, replicas, log retention, ingress profile, probes, finalization policy, and tags. ✅ Replica bounds and Log Analytics retention are parameterized
+- [x] P5.9 Create registry storage and RBAC only when the selected backend requires them.
+- [x] P5.10 Deploy immutable image tags or digests and pin runtime dependencies.
+- [x] P5.11 Separate runtime dependencies from development and test dependencies.
+- [x] P5.12 Add bounded retry with jitter, explicit timeouts, circuit-breaking behavior, and dependency-specific status mapping. ✅ Bounded retry, jitter, explicit timeouts, and safe 503 mapping are complete
+
+### WP5 Implementation Progress (2026-08-31)
+
+- ✅ Production Bicep infrastructure: VNet, subnets, NAT Gateway, private endpoint, private DNS zone, Container App environment, Storage account, RBAC assignment
+- ✅ Deployment reuse: Script preserves Entra app ID when supplied via `-ProxyEntraAppId`; multiple deployments use same client ID
+- ✅ Policy-compliant networking: tenant policy forces `publicNetworkAccess=Disabled` on storage; private endpoint + VNet integration bypasses this
+- ✅ Runtime dependencies split: production image uses `requirements.txt`; test dependencies in `requirements-dev.txt`
+- ✅ Parameterized Container App: minReplicas, maxReplicas, logRetentionDays configurable; revisionSuffix forced for immutable redeploy
+- ✅ Immutable image deployment: the release tag is resolved to a validated ACR `sha256` digest before Bicep deployment; the Python base image and complete runtime package graph are pinned.
+
+### WP5 Acceptance Criteria
+
+- ✅ A routine redeployment preserves the Entra audience and all caller grants.
+- ✅ Production Table traffic uses private networking under restrictive storage policy.
+- ✅ The container runs non-root and uses an immutable, reproducible dependency set.
+- ⏳ Platform dependency failures are distinguishable from caller errors and terminal investigation failures (pending multi-replica test)
+- Caller-scoped idempotency keys and request fingerprints are persisted in both registry implementations; matching retries replay the existing investigation and conflicting payloads are rejected.
+- Both registry backends now reserve a caller slot before Platform SRE thread creation, finalize it after success, and release it on failure. The memory backend protects admission with a lock, while the Table backend uses a per-caller transaction counter.
+- The Table backend now uses a per-caller quota counter and same-partition transaction to atomically increment the counter while creating a reservation. Live private-Storage concurrency validation remains a release-gate test.
+- `CALLER_POLICIES_JSON` now supports operator-owned same-tenant caller registration by validated app ID, including enabled state, severity ceiling, and concurrent quota. Empty configuration preserves local development behavior; persistent policy administration remains open.
+- The v1 HTTP lifecycle routes are implemented and tested for create, status, findings, bounded polling, canonical response envelopes, and incomplete findings handling.
+- Versioned HTTP failures now return stable `application/problem+json` responses with safe error codes, correlation IDs, and retryability; legacy and MCP error behavior remain unchanged.
+- Checkpoint verification: 38 tests passed, Bicep compilation passed, PowerShell deployment-script parsing passed, and editor diagnostics are clean.
+- Corporate package-source policy is confirmed by the build environment: public PyPI access fails from the image, while the approved corporate HTTPS feed succeeds. The Dockerfile now requires an explicit `PIP_INDEX_URL` build argument and does not embed credentials.
+- `deploy-escalation-proxy.ps1` passes `PIP_INDEX_URL` to ACR builds, with an overridable approved-feed default, so routine deployments match the validated container build path.
+- Deployment now resolves the emitted Container Apps FQDN and configures it in `MCP_ALLOWED_HOSTS`, preserving MCP DNS-rebinding protection in hosted environments.
+- Connector deployments use the canonical `/mcp/` endpoint to avoid HTTP redirect handling differences in Azure SRE connector clients.
+- Post-host-allowlist deployable-artifact smoke passed: the image rebuilt from the corporate feed, ran as non-root `appuser`, and returned 200 from `/health/live` and `/mcp`; the temporary container was removed after log inspection.
+- Memory-backed deployments now conditionally omit the registry Storage account and Storage Table role assignment; generated Bicep confirms both resources are gated on `registryBackend=table`.
+- Runtime and test dependencies are split into `requirements.txt` and `requirements-dev.txt`; the production image rebuilds successfully without pytest. On 2026-09-04, the validated production runtime graph was exact-pinned, the Python base image was digest-pinned, and ACR digest deployment completed successfully.
+- All Platform SRE Agent HTTP calls now use bounded exponential retry with jitter, configured timeouts, and safe 503 mapping after transient failures; circuit-breaking remains open.
+- Container App minimum/maximum replica bounds and Log Analytics retention are now deployment parameters; memory mode remains forcibly single-replica.
+- Container validation completed with the corporate feed: image build succeeded, image runs as non-root `appuser`, `/health/live` returned 200, `/mcp` returned 200, startup logs were clean, and the validation container was removed.
+- The previous Docker validation note is superseded; remaining container work is vulnerability scanning and immutable release tagging.
+- Focused local deployment smoke completed using `REGISTRY_BACKEND=memory`: a fresh image build passed, `/health/live` returned 200, `/health/ready` returned expected 503 without managed identity, `/mcp` probe succeeded, OpenAPI exposed the v1 routes, and invalid MCP authorization returned 403 rather than a server failure.
+- Readiness now verifies both the active registry backend and managed-identity token acquisition; either dependency failure returns a safe 503 response without internal details.
+- The v1 findings endpoint now parses only finalized liaison reports with required Root Cause, Evidence, Recommended Actions, and Verdict sections. Malformed finalized reports are rejected with a safe 502 response instead of being converted into placeholder findings.
+- Findings redaction now covers credential-shaped assignments, multiline JSON secret values, and signed URL query parameters before public return.
+- Each investigation now uses one correlation ID in the registry and Platform SRE request context; caller responses expose only the opaque investigation ID and correlation ID, never the platform thread ID.
+- Added `.github/workflows/proxy-validation.yml`; configure the repository or organization `PIP_INDEX_URL` variable with the approved corporate HTTPS package feed before enabling CI runs.
+- All six repository Bicep sources compile successfully; only the available Bicep CLI update warning was emitted.
+- All six repository PowerShell scripts parse successfully with the PowerShell AST parser.
+- Fresh memory-backed staging deployment completed in `platformsre-rg` and `workload-rg`: the platform agent, proxy, workload reference agent, and both `EscalationCaller` grants deployed successfully. The proxy is healthy at its canonical `/mcp/` endpoint.
+- The workload connector initially followed a `/mcp` redirect; republishing `/mcp/` and resyncing the connector produced direct MCP `200` traffic. Remaining connector `403`s are a verified managed-identity token cache issue: Graph shows the workload UAMI has `EscalationCaller`, but received tokens still contain `roles: []`.
+- Restarting the fresh workload agent refreshed the connector session: `platform-escalation-mi` now reports `Connected`, healthy, with all three tools. Direct MCP traffic reaches `/mcp/` successfully.
+- 2026-08-27 controlled staging lifecycle completed through the WorkloadApp reference consumer: create returned investigation `de4fc309-d72d-4821-a7b6-ca37ba653c50`, inline long-polling reached the platform thread, and the investigation completed successfully. This proves the deployed Azure SRE connector and the three-tool lifecycle for one caller; two-caller isolation, final report evidence capture, and Table-backed production validation remain open.
+- 2026-08-27 added an opt-in production networking profile to the proxy Bicep and deployment script: delegated Container Apps infrastructure subnet, private-endpoint subnet, Table private endpoint, and `privatelink.table.core.windows.net` private DNS zone/link. The template and script compile/parse successfully; live private-network validation remains open.
+- 2026-08-27 ARM what-if confirmed the existing memory-backed Container Apps environment has no VNet configuration and proposed broad environment-property deletions when VNet integration was added. Treat the private Table rollout as a parallel proxy/environment deployment with a new name, followed by lifecycle validation and connector cutover; do not mutate the working staging environment in place.
+- 2026-08-27 private test topology selected: an isolated VNet named `sre-escalation-proxy-prod-vnet` in `platformsre-rg`, using `10.42.0.0/16`, a delegated `10.42.0.0/27` Container Apps subnet, and a `10.42.1.0/28` Storage private-endpoint subnet. These are explicit deployment parameters.
+- 2026-08-27 clean private Table deployment succeeded after adding a NAT Gateway for Container Apps egress. The proxy runs as `sre-escalation-proxy-prod` with Table storage, an approved private endpoint, readiness `200`, and image digest `sha256:3f21c0887d8d6041dab3c03d7479923af1c609048d550fd3a6885f811a0a3fa8` (initial deployment) / latest diagnostic revision rebuilt from the same source.
+- 2026-08-27 WorkloadApp connector cutover succeeded: `platform-escalation-mi` reports `Connected` with 3 tools against the new `/mcp/` endpoint, and the proxy logs show the expected UAMI with `roles: ["EscalationCaller"]`. Connector negotiation currently requires diagnostic `MCP_ENABLE_DNS_REBINDING_PROTECTION=false` because the SDK rejects the Azure Container Apps Host header despite exact allowlist entries; restore protection and resolve this compatibility issue before release.
+- 2026-08-27 Table ETag failure remediation: status polling previously read a Table entity, reread it through ownership validation, then updated using the first read's stale ETag. Polling now validates and updates from one entity read, while reservation finalize/release use conditional ETag retries. Focused security and contract tests pass (50); corrected private proxy revision deployed with image digest `sha256:ec6b61c914e252e2c96b54d0d733ba8973b3c9835008e1358d4f57d0b0f8da4d`.
+- 2026-08-27 follow-up runtime failure: Table expiry cleanup treated the per-caller `__quota_counter__` entity as an investigation and accessed missing `caller_appid`, causing the observed KeyError. Cleanup now skips counter rows and guards caller identity access. Regression suite passes (51 tests); private Table proxy redeployed and readiness is `200`. The reported caller client ID `7723791a-2e73-401b-ba39-3403d9f680ce` does not exist in this subscription; current WorkloadApp UAMI is client `1cedc4c0-4c8c-4fa2-9530-376651a6e521`, principal `fc86570c-452a-4eed-a5c4-59dabd498bb0`, with `EscalationCaller` verified.
+- 2026-08-27 repeated ETag failure was not identity-cache related: connector status was `Connected`, tokens contained the expected `appid` and `EscalationCaller`, and the proxy was running with `maxReplicas=5`. Added Table ETag normalization (`etag`/`_etag`), conditional retry backoff for quota and reservation updates, and conflict telemetry. Focused suite remains green (51 tests). Deployed revision `sre-escalation-proxy-prod--0000007` with Table backend and temporary `minReplicas=1`, `maxReplicas=1` for controlled retry testing.
+- 2026-08-27 investigation `864b614f-63cd-4ee7-b1d8-f588a72ff16d` completed successfully through the private Table-backed proxy: reservation and platform thread creation succeeded, status polling reached `completed`, and summary retrieval returned `summary_status=completed` with `finalization_token=ESCALATION_FINAL_V1`. This validates the repaired single-replica production path; two-caller and multi-replica concurrency validation remain open.
+- 2026-08-27 scale-out gate started: `sre-escalation-proxy-prod` is pinned to two running replicas on revision `sre-escalation-proxy-prod--0000008`; repeated readiness probes returned `200`, the WorkloadApp connector remains `Connected`, and both replicas started cleanly. Concurrent two-caller lifecycle and restart-survival evidence remain open.
+- 2026-08-27 overnight cost reduction: removed orphaned `sre-escalation-proxy-id` and `sre-escalation-proxy-v2-id` identities, their old `SRE Agent Administrator`/`AcrPull` assignments, and old `sre-escalation-proxy-logs`/`sre-escalation-proxy-v2-logs` workspaces. Scaled the active proxy to `minReplicas=0,maxReplicas=1`, then deactivated revision `sre-escalation-proxy-prod--0000009`; its replica is `NotRunning`. Retained the production Table, private endpoint, isolated VNet, NAT, and DNS resources for tomorrow's testing.
+- 2026-08-27 two-investigation concurrency validation passed on the two-replica Table deployment: investigations `9eac9704-b206-4f42-8cf8-d36fa8dbee9a` and `d49d598d-6c30-4698-9934-8d784243cb56` each produced a reservation, platform thread, 54 status observations in aggregate, and a completed structured summary with `ESCALATION_FINAL_V1`. No Table conflict telemetry was emitted for either run.
+- 2026-09-01 fresh two-replica shared-state validation passed for investigation `879e0efe-58b2-441e-9397-f395ca542b82`: replica `...-gq7g6` created the reservation and platform thread, both replicas served status polls, and `...-gq7g6` returned the completed structured summary with `ESCALATION_FINAL_V1`. No Table, ETag, quota, or application errors were emitted. This validates multi-replica access but not restart survival; the investigation completed before a targeted replica recycle could be proven.
+- 2026-09-01 rolling restart-survival validation passed for investigation `9d03c7fd-0629-4829-826e-49a6771ca9a0`: the revision restart was accepted at `01:07:53Z` while status was `running`; both original replicas were replaced by `...-8r87t` and `...-bknzg`; polls continued throughout replacement; completion was observed at `01:12:00Z`; and summary retrieval returned `ESCALATION_FINAL_V1` at `01:12:12Z`. No matching Table, ETag, storage, quota, or application errors were emitted.
+- 2026-09-01 quota-one validation exposed persisted terminal-slot leakage: completed investigations retained `reservation_state=active`, so the per-caller counter remained saturated. Terminal status and finalized-summary paths now call idempotent completion, and Table completion atomically decrements the counter while marking the investigation terminal. Admission reconciles a rejecting counter from authoritative unexpired active rows. Four focused regressions and the full 58-test proxy suite pass.
+- 2026-09-01 repaired deployment used image `quota-release-20260901-01` (`sha256:f6768a8cf4199e91f687d8ac039a80cfc6a2895801c07b223287c90b219d290c`) followed by current image `quota-reconcile-20260901-01` (`sha256:5ec83102ae99f1ac0f80dfb0d4744cb43c7edfe4fb563cbc434c5a289a74bfe8`). All three known pre-fix active investigations were replayed through the repaired terminal lifecycle before retesting.
+- 2026-09-01 same-caller quota-one gate passed: investigation `ee397bee-e8c2-487c-a6d4-ca79287ba9c0` was admitted, an overlapping request received `429`, and the admitted lifecycle completed with `ESCALATION_FINAL_V1`. This validates rejection for one caller but does not prove independent-caller isolation.
+- 2026-09-01 post-completion slot-reuse and restored-policy smoke passed with investigation `22e412bd-7eb3-4338-bbbb-e5b818f1d074`. It was admitted after the quota-one investigation completed, crossed both replicas, reached `completed`, and returned `ESCALATION_FINAL_V1`. The temporary caller policy was removed; revision `sre-escalation-proxy--0000006` is latest/latest-ready and healthy at 2/2, health endpoints return `200`, and `platform-escalation-mi` is connected and healthy with three tools and zero consecutive ping failures.
+- 2026-09-01 independent-caller release gate passed after recreating only `WorkloadIsolation` at `https://workloadisolation--f4d74d8c.81d8f7bf.australiaeast.azuresre.ai` with its pre-authorized UAMI attached before first connector negotiation. Proxy logs validated client `680b181a-79d8-4cf5-b2b6-48c324e9781e`, principal `00aea911-b2ec-4adf-a8fc-a12799b267f5`, with `roles: ["EscalationCaller"]`; the connector was `Connected`, healthy, with three tools.
+- 2026-09-01 overlapping independent callers were both admitted on separate proxy replicas: WorkloadIsolation client `680b181a-79d8-4cf5-b2b6-48c324e9781e` created investigation `bf751933-3029-479b-b8ae-df1ff13bad90` at `06:14:32Z`, and WorkloadApp client `4a0f25fe-4dbd-48f8-aa3e-aee25f71ff2d` created investigation `4b6748fc-fd43-4663-ada3-38398fd7a557` at `06:14:35Z`. Reciprocal status lookups returned opaque `not found` MCP errors (`isError: true`) and disclosed no foreign state. Both owned lifecycles completed and returned `ESCALATION_FINAL_V1` at `06:19:40Z` and `06:18:44Z`, respectively; no matching Table, ETag, quota, storage, or application errors were emitted.
+- 2026-09-01 connector recovery exposed a deployment-helper race: connector deletion can temporarily return the parent agent to `InProgress`. `Sync-McpConnectorEnvelope` now waits up to five minutes for parent provisioning state `Succeeded` before recreating the connector child. Temporary isolation connector references in the local custom-agent YAML files were restored to canonical `platform-escalation-mi`; WorkloadApp and `.deploy-state.json` were not changed.
+- 2026-09-01 overnight cost shutdown completed after the release gates: `sre-escalation-proxy` was reduced to `minReplicas=0,maxReplicas=1`, revision `sre-escalation-proxy--0000006` was deactivated, and Azure reported `Stopped` with zero replicas. Project-owned NAT gateway `sre-escalation-proxy-nat`, static public IP `sre-escalation-proxy-egress-ip`, and Storage private endpoint `sreocoxujof5ynqsregistry-table-pe` were deleted; their Bicep definitions remain the recovery source. The Standard LRS Table storage and its data, VNet/subnets, private DNS, Container Apps environment/app configuration, Log Analytics workspace, identities, role assignments, and all three SRE agents were retained. The shared Basic ACR `acrsrelabjplayn` in `rg-srelab-australiaeast` was intentionally not changed.
+
+### WP5 Acceptance Criteria
+
+- A routine redeployment preserves the Entra audience and all caller grants.
+- Production Table traffic uses private networking under restrictive storage policy.
+- The container runs non-root and uses an immutable, reproducible dependency set.
+- Platform dependency failures are distinguishable from caller errors and terminal investigation failures.
+
+## WP6: Strengthen Findings and Observability
+
+**Goal:** Treat platform findings as a controlled data boundary and make service behavior auditable.
+
+- [x] P6.1 Define a versioned structured final-report schema.
+- [x] P6.2 Update the platform liaison to produce the structured report and completion marker.
+- [x] P6.3 Parse and validate the allowlisted report fields in the proxy.
+- [x] P6.4 Reject or quarantine malformed findings instead of returning arbitrary text.
+- [x] P6.5 Retain defense-in-depth redaction for credentials, connection strings, signed URLs, tokens, keys, and multiline/JSON values.
+- [x] P6.6 Emit safe redaction and schema-rejection metrics without sensitive values.
+- [ ] P6.7 Define structured audit events and metrics for authorization, admission, idempotency, quotas, latency, completion, failures, registry health, and platform dependencies.
+- [x] P6.8 Propagate one correlation ID end to end without exposing the platform thread ID.
+- [ ] P6.9 Add alert and dashboard guidance for security and availability signals.
+
+### WP6 Acceptance Criteria
+
+- Public findings contain only allowlisted schema fields.
+- No bearer token, platform thread ID, or credential-shaped value appears in responses or logs.
+- Documentation clearly distinguishes Container App Log Analytics logs from optional SRE Agent Application Insights resources.
+
+## WP7: Reframe the Repository and Reference Consumer
+
+**Goal:** Make the platform service the primary deliverable and the workload implementation an optional example.
+
+- [x] P7.1 Rewrite the root README around the Platform SRE Agent and Escalation Service.
+- [x] P7.2 Update architecture documentation to distinguish privileged admin access from the narrow external-agent path.
+- [x] P7.3 Move the workload flow under a clearly labeled reference implementation section.
+- [ ] P7.4 Generalize public terminology from workload to caller or consumer while preserving `workload_name` compatibility in v1.
+- [ ] P7.5 Split fixed ALZ assumptions into a sample playbook or explicit platform-owned configuration.
+- [x] P7.6 Add one generic MCP client example using same-tenant application identity.
+- [x] P7.7 Add one generic HTTP client example using same-tenant application identity.
+- [ ] P7.8 Add owner-selected LICENSE, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, and CHANGELOG.md.
+- [x] P7.9 Add architecture decision records for authentication, transport, and storage.
+- [x] P7.10 Archive the historical phase summary after incorporating still-relevant decisions.
+
+### WP7 Acceptance Criteria
+
+- A new consumer can understand and integrate with the proxy without deploying a workload SRE Agent.
+- The workload example still completes create, long-poll status, and findings retrieval.
+- No repository license is inferred or selected without owner approval.
+
+## WP8: Automated Verification and Release Gate
+
+**Goal:** Prevent contract, security, deployment, and compatibility regressions.
+
+- [ ] P8.1 Add CI for pinned dependency installation, formatting, linting, typing, and security checks.
+- [x] P8.2 Run unit, HTTP contract, and registry contract suites in CI.
+- [x] P8.3 Build all Bicep entry points and validate PowerShell scripts.
+- [ ] P8.4 Build and scan the container image.
+- [x] P8.5 Check generated OpenAPI and schema compatibility.
+- [x] P8.6 Remove generated ARM JSON from source control; Bicep source is authoritative and templates are rebuilt during validation.
+- [x] P8.7 Add a staging end-to-end test with two independent caller identities. Overlapping WorkloadApp and WorkloadIsolation investigations completed on separate caller partitions on 2026-09-01, and a fresh simultaneous two-caller smoke passed after restoration on 2026-09-04.
+- [ ] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed; disabled/revoked caller and remaining live idempotency/severity cases are open.
+- [ ] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts.
+- [x] P8.10 Verify Azure SRE Agent reference connector compatibility. The fresh WorkloadApp connector completed the create/status/findings lifecycle in staging on 2026-08-27.
+
+### V1 Release Gate
+
+A v1 release is allowed only when all of the following are true:
+
+- [x] Immutable redeployment preserves the Entra audience and existing caller grants. Verified on 2026-09-04 with the stable client ID, app role ID, five caller grants, and both connectors intact.
+- [x] Private Table access works under the target policy environment.
+- [ ] An official MCP SDK client passes the supported protocol flow.
+- [x] The Azure SRE Agent connector passes the same three-tool flow.
+- [x] HTTP OpenAPI compatibility checks pass.
+- [x] Multi-replica and restart tests preserve ownership and state. Two-replica lifecycle and in-flight rolling restart survival passed on 2026-09-01.
+- [ ] Security scans pass or have explicitly accepted findings.
+- [ ] Manual log inspection finds no tokens, platform thread IDs, or unredacted sensitive findings.
+
+## Affected Files
+
+- `escalation-proxy/app/main.py`
+- `escalation-proxy/app/test_security.py`
+- `escalation-proxy/app/requirements.txt`
+- `escalation-proxy/app/Dockerfile`
+- `escalation-proxy/infrastructure/main.bicep`
+- `scripts/deploy-escalation-proxy.ps1`
+- `scripts/grant-workload-escalation.ps1`
+- `modules/mcp-connector-streamable-http.bicep`
+- `platform/custom-agents/workload-liaison.yaml`
+- `workload/custom-agents/platform-escalation.yaml`
+- `README.md`
+- `escalation-proxy/README.md`
+- `docs/architecture.md`
+- `docs/detailed-spec.md`
+- `docs/threat-model.md`
+- `.github/workflows/*`
+- `LICENSE`
+- `CONTRIBUTING.md`
+- `SECURITY.md`
+- `CODE_OF_CONDUCT.md`
+- `CHANGELOG.md`
+
+## Verification Strategy
+
+1. Run proxy unit and contract tests against both memory and Table registry implementations.
+2. Run an official MCP SDK client against `/mcp` for initialization, discovery, calls, authorization, malformed requests, and reconnect behavior.
+3. Run HTTP schema checks and the full lifecycle through a generic same-tenant caller.
+4. Build every Bicep entry point and run static deployment-policy checks.
+5. Deploy staging with at least two replicas and two caller identities.
+6. Verify the Azure SRE workload reference connector end to end.
+7. Simulate registry and Platform SRE Agent outages.
+8. Run dependency, container, and IaC security scans and inspect logs for sensitive data.
+
+## Deferred Decisions
+
+1. Repository license selection remains an owner decision before public release.
+2. APIM may later provide centralized governance and analytics but is not required for v1.
+3. Cross-tenant callers require a separate design because they change issuer validation, tenant allowlisting, onboarding, abuse controls, and support obligations.
+
+## Decision Log
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-08-26 | Support same-tenant service identities in v1 | Preserves a clear, testable authorization boundary for the first reusable release. |
+| 2026-08-26 | Support both MCP and asynchronous HTTP | MCP serves agent frameworks while HTTP provides a portable fallback and integration contract. |
+| 2026-08-26 | Keep the workload SRE Agent as a reference consumer | Demonstrates Azure SRE integration without coupling the platform service to that caller. |
+| 2026-08-26 | Keep Azure Table Storage as the first production registry | Builds on the existing implementation while requiring private networking and atomic semantics before release. |

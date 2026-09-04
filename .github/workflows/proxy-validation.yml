@@ -1,0 +1,42 @@
+name: Proxy Validation
+
+on:
+  pull_request:
+    paths:
+      - "escalation-proxy/**"
+      - ".github/workflows/proxy-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "escalation-proxy/**"
+      - ".github/workflows/proxy-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+      PLATFORM_AGENT_ENDPOINT: http://localhost
+      ENTRA_TENANT_ID: test-tenant
+      ENTRA_CLIENT_ID: test-client
+    defaults:
+      run:
+        working-directory: escalation-proxy/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify approved package source
+        run: |
+          test -n "$PIP_INDEX_URL"
+          case "$PIP_INDEX_URL" in https://*) ;; *) exit 1;; esac
+      - name: Install dependencies
+        run: python -m pip install --index-url "$PIP_INDEX_URL" -r requirements-dev.txt
+      - name: Compile proxy modules
+        run: python -m compileall -q main.py contracts.py caller_policy.py mcp_transport.py
+      - name: Run proxy tests
+        run: python -m pytest -q

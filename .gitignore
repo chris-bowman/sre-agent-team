@@ -1,0 +1,27 @@
+# Sensitive / generated files
+*.bicepparam.local
+*.env
+.env.*
+*.secret
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+.venv/
+node_modules/
+*.tmp
+.tmp-agent-schema-check.json
+
+# Generated Bicep ARM templates (build these during validation)
+platform/main.json
+workload/main.json
+escalation-proxy/infrastructure/main.json
+modules/sre-agent.json
+modules/rbac-assignments.json
+modules/mcp-connector-streamable-http.json
+
+# Container build artifacts
+escalation-proxy/app/*.tar
+
+# Deployment state written by scripts/*.ps1 (may contain resource IDs/principals)
+scripts/.deploy-state.json

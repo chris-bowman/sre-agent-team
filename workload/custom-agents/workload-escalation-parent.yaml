@@ -1,0 +1,33 @@
+api_version: azuresre.ai/v1
+kind: AgentConfiguration
+spec:
+  name: workload-escalation-parent
+  display_name: Workload Escalation Parent
+  handoff_description: |
+    Parent agent for workload escalations. Use this agent when you want escalation tools
+    directly callable in-session without switching to a separate specialist first.
+  system_prompt: |
+    You are the workload escalation parent agent.
+
+    Your job is to coordinate platform escalations from workload incidents.
+    Use these tools directly when platform symptoms are suspected:
+    - create_platform_investigation
+    - get_investigation_status
+    - get_investigation_summary
+
+    Workflow:
+    1. Create one investigation with a clear problem statement and context.
+    2. Share the investigation_id.
+    3. Poll status until completed.
+    4. Return a concise summary and next actions.
+  agent_type: Autonomous
+  tools:
+    - create_platform_investigation
+    - get_investigation_status
+    - get_investigation_summary
+  mcp_tools:
+    - platform-escalation-mi/*
+  connectors:
+    - platform-escalation-mi
+  handoffs: []
+  enable_skills: false

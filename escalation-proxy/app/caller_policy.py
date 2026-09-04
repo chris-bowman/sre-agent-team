@@ -3,7 +3,6 @@
 import json
 from dataclasses import dataclass
 
-
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
@@ -66,7 +65,5 @@ class CallerPolicyStore:
         if not policy.enabled:
             raise ValueError("Caller is disabled for the escalation service")
         if SEVERITY_ORDER[severity] > SEVERITY_ORDER[policy.maximum_severity]:
-            raise ValueError(
-                f"Requested severity exceeds caller policy limit ({policy.maximum_severity})"
-            )
+            raise ValueError(f"Requested severity exceeds caller policy limit ({policy.maximum_severity})")
         return policy

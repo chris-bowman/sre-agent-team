@@ -26,31 +26,32 @@ Environment variables (set in Container App):
     REGISTRY_TABLE_NAME        - Table name, default InvestigationRegistry
 """
 
-import os
 import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
 import re
 import time
 import uuid
-from threading import Lock
-from itertools import islice
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Any
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from itertools import islice
+from threading import Lock
+from typing import Any
+
 import httpx
-from fastapi import FastAPI, HTTPException, Header, Request, Response
+import jwt  # PyJWT
+from azure.core import MatchConditions
+from azure.core.credentials import AccessToken
+from azure.core.exceptions import ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
+from azure.data.tables import TableServiceClient, UpdateMode
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
-from azure.data.tables import TableServiceClient, UpdateMode
-from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError, ResourceModifiedError
-from azure.core.credentials import AccessToken
-from azure.core import MatchConditions
-import jwt  # PyJWT
 
 from caller_policy import CallerPolicyStore
 from contracts import (
@@ -80,7 +81,12 @@ SRE_AGENT_SCOPE = os.environ.get("SRE_AGENT_SCOPE", "https://azuresre.dev/.defau
 PLATFORM_AGENT_V1_API = f"{PLATFORM_AGENT_ENDPOINT}/api/v1"
 PLATFORM_AGENT_V2_API = f"{PLATFORM_AGENT_ENDPOINT}/api/v2"
 FINALIZATION_TOKEN = os.environ.get("FINALIZATION_TOKEN", "ESCALATION_FINAL_V1")
-REQUIRE_FINALIZATION_TOKEN = os.environ.get("REQUIRE_FINALIZATION_TOKEN", "true").strip().lower() in ("1", "true", "yes", "on")
+REQUIRE_FINALIZATION_TOKEN = os.environ.get("REQUIRE_FINALIZATION_TOKEN", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 TARGET_LIAISON_AGENT = os.environ.get("TARGET_LIAISON_AGENT", "workload_liaison")
 REGISTRY_BACKEND = os.environ.get("REGISTRY_BACKEND", "memory").strip().lower()
 REGISTRY_TABLE_ENDPOINT = os.environ.get("REGISTRY_TABLE_ENDPOINT", "").rstrip("/")
@@ -117,11 +123,9 @@ _SENSITIVE_VALUE_PATTERN = re.compile(
     r"(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string)\s*[:=]\s*)([^\s,;]+)"
 )
 _SENSITIVE_JSON_FIELD_PATTERN = re.compile(
-    r'''(?is)(["']?(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string)["']?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\]\s]+)'''
+    r"""(?is)(["']?(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string)["']?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\]\s]+)"""
 )
-_SENSITIVE_QUERY_PATTERN = re.compile(
-    r"(?i)([?&](?:sig|token|access_token|api_key|client_secret)=)[^&#\s]+"
-)
+_SENSITIVE_QUERY_PATTERN = re.compile(r"(?i)([?&](?:sig|token|access_token|api_key|client_secret)=)[^&#\s]+")
 
 # ── Managed Identity credential (for calling platform SRE agent) ──────────────
 mi_credential = ManagedIdentityCredential(client_id=AZURE_CLIENT_ID)
@@ -131,6 +135,7 @@ mi_credential = ManagedIdentityCredential(client_id=AZURE_CLIENT_ID)
 @dataclass
 class InvestigationRecord:
     """Registry entry for an investigation."""
+
     investigation_id: str
     caller_oid: str  # Azure AD object ID of the creating caller
     caller_appid: str  # Application ID
@@ -150,6 +155,7 @@ class InvestigationRecord:
 
 class InvestigationRegistry:
     """Thread-safe registry of active investigations with ownership tracking."""
+
     def __init__(self):
         self._registry: dict[str, InvestigationRecord] = {}
         self._workload_investigations: dict[str, list[str]] = {}  # workload_name -> [investigation_ids]
@@ -179,9 +185,7 @@ class InvestigationRegistry:
                 and record.reservation_state in {"reserved", "active"}
             )
             if active_count >= maximum_investigations:
-                raise ValueError(
-                    f"Workload has reached maximum concurrent investigations ({maximum_investigations})"
-                )
+                raise ValueError(f"Workload has reached maximum concurrent investigations ({maximum_investigations})")
 
             investigation_id = str(uuid.uuid4())
             record = InvestigationRecord(
@@ -203,9 +207,7 @@ class InvestigationRegistry:
             self._workload_investigations.setdefault(workload_name, []).append(investigation_id)
             return investigation_id
 
-    def finalize_reservation(
-        self, investigation_id: str, caller_appid: str, platform_thread_id: str
-    ) -> None:
+    def finalize_reservation(self, investigation_id: str, caller_appid: str, platform_thread_id: str) -> None:
         with self._lock:
             record = self._registry.get(investigation_id)
             if not record or record.caller_appid != caller_appid:
@@ -219,9 +221,7 @@ class InvestigationRegistry:
             if record and record.caller_appid == caller_appid and record.reservation_state == "reserved":
                 del self._registry[investigation_id]
 
-    def complete_investigation(
-        self, investigation_id: str, caller_appid: str, terminal_state: str
-    ) -> None:
+    def complete_investigation(self, investigation_id: str, caller_appid: str, terminal_state: str) -> None:
         with self._lock:
             record = self._registry.get(investigation_id)
             if not record or record.caller_appid != caller_appid:
@@ -273,7 +273,7 @@ class InvestigationRegistry:
                 expected_appid=record.workload_identity_appid,
                 provided_appid=workload_identity_appid,
             )
-            raise ValueError(f"Unauthorized: investigation belongs to a different workload")
+            raise ValueError("Unauthorized: investigation belongs to a different workload")
 
         # Check expiry.
         if time.time() > record.expires_at:
@@ -288,9 +288,7 @@ class InvestigationRegistry:
 
         return record
 
-    def find_by_idempotency_key(
-        self, caller_appid: str, idempotency_key: str
-    ) -> InvestigationRecord | None:
+    def find_by_idempotency_key(self, caller_appid: str, idempotency_key: str) -> InvestigationRecord | None:
         for record in self._registry.values():
             if (
                 record.caller_appid == caller_appid
@@ -308,9 +306,7 @@ class InvestigationRegistry:
 
         # Enforce minimum poll interval.
         if record.last_status_poll > 0 and (now - record.last_status_poll) < MIN_STATUS_POLL_INTERVAL_SECONDS:
-            raise ValueError(
-                f"Status poll rate limit: minimum {MIN_STATUS_POLL_INTERVAL_SECONDS}s between polls"
-            )
+            raise ValueError(f"Status poll rate limit: minimum {MIN_STATUS_POLL_INTERVAL_SECONDS}s between polls")
 
         # Enforce maximum poll count.
         if record.status_poll_count >= MAX_STATUS_POLLS_PER_INVESTIGATION:
@@ -321,30 +317,25 @@ class InvestigationRegistry:
         record.last_status_poll = now
         record.status_poll_count += 1
 
-    def check_workload_quota(
-        self, workload_identity_appid: str, maximum_investigations: int | None = None
-    ) -> None:
+    def check_workload_quota(self, workload_identity_appid: str, maximum_investigations: int | None = None) -> None:
         """Check if a workload has reached its investigation quota. Raises ValueError if exceeded."""
         quota = maximum_investigations or MAX_INVESTIGATIONS_PER_WORKLOAD
         active_count = sum(
-            1 for rec in self._registry.values()
+            1
+            for rec in self._registry.values()
             if rec.workload_identity_appid == workload_identity_appid
             and time.time() <= rec.expires_at
             and rec.reservation_state in {"reserved", "active"}
         )
         if active_count >= quota:
-            raise ValueError(
-                f"Workload has reached maximum concurrent investigations ({quota})"
-            )
+            raise ValueError(f"Workload has reached maximum concurrent investigations ({quota})")
 
     def cleanup_expired(self, limit: int = MAX_EXPIRY_CLEANUP_BATCH_SIZE) -> int:
         """Remove up to limit expired investigations. Returns the count removed."""
         now = time.time()
-        expired = [
-            investigation_id
-            for investigation_id, record in self._registry.items()
-            if now > record.expires_at
-        ][:limit]
+        expired = [investigation_id for investigation_id, record in self._registry.items() if now > record.expires_at][
+            :limit
+        ]
         for id in expired:
             del self._registry[id]
         return len(expired)
@@ -405,7 +396,7 @@ class TableStorageInvestigationRegistry:
                 return
             except ResourceModifiedError:
                 log_event("table_quota_counter_conflict", operation="decrement", attempt=_attempt + 1)
-                time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Quota counter update conflicted; please retry")
 
@@ -522,11 +513,9 @@ class TableStorageInvestigationRegistry:
                         operation="reconcile",
                         attempt=_attempt + 1,
                     )
-                    time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                    time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                     continue
-                raise ValueError(
-                    f"Workload has reached maximum concurrent investigations ({maximum_investigations})"
-                )
+                raise ValueError(f"Workload has reached maximum concurrent investigations ({maximum_investigations})")
             updated_counter = dict(counter)
             updated_counter["active_count"] = active_count + 1
             try:
@@ -547,13 +536,11 @@ class TableStorageInvestigationRegistry:
                 return record.investigation_id
             except ResourceModifiedError:
                 log_event("table_quota_counter_conflict", operation="reserve", attempt=_attempt + 1)
-                time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Quota reservation conflicted; please retry")
 
-    def finalize_reservation(
-        self, investigation_id: str, caller_appid: str, platform_thread_id: str
-    ) -> None:
+    def finalize_reservation(self, investigation_id: str, caller_appid: str, platform_thread_id: str) -> None:
         for _attempt in range(3):
             entity = self._table.get_entity(self._partition_key(caller_appid), investigation_id)
             record = self._from_entity(entity)
@@ -571,7 +558,7 @@ class TableStorageInvestigationRegistry:
                 return
             except ResourceModifiedError:
                 log_event("table_investigation_conflict", operation="finalize", attempt=_attempt + 1)
-                time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Investigation reservation update conflicted; please retry")
 
@@ -594,13 +581,11 @@ class TableStorageInvestigationRegistry:
                 return
             except ResourceModifiedError:
                 log_event("table_investigation_conflict", operation="release", attempt=_attempt + 1)
-                time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Investigation reservation cleanup conflicted; please retry")
 
-    def complete_investigation(
-        self, investigation_id: str, caller_appid: str, terminal_state: str
-    ) -> None:
+    def complete_investigation(self, investigation_id: str, caller_appid: str, terminal_state: str) -> None:
         for _attempt in range(3):
             entity = self._table.get_entity(self._partition_key(caller_appid), investigation_id)
             if entity.get("caller_appid") != caller_appid:
@@ -639,14 +624,22 @@ class TableStorageInvestigationRegistry:
                 return
             except ResourceModifiedError:
                 log_event("table_investigation_conflict", operation="complete", attempt=_attempt + 1)
-                time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Investigation completion update conflicted; please retry")
 
-    def create_investigation(self, caller_oid: str, caller_appid: str, workload_name: str,
-                             workload_identity_appid: str, platform_thread_id: str, severity: str,
-                             idempotency_key: str = "", request_fingerprint: str = "",
-                             request_correlation_id: str = "") -> str:
+    def create_investigation(
+        self,
+        caller_oid: str,
+        caller_appid: str,
+        workload_name: str,
+        workload_identity_appid: str,
+        platform_thread_id: str,
+        severity: str,
+        idempotency_key: str = "",
+        request_fingerprint: str = "",
+        request_correlation_id: str = "",
+    ) -> str:
         investigation_id = self.reserve_investigation(
             caller_oid,
             caller_appid,
@@ -671,40 +664,52 @@ class TableStorageInvestigationRegistry:
                 return record
         return None
 
-    def get_investigation(self, investigation_id: str, caller_oid: str,
-                          workload_identity_appid: str) -> InvestigationRecord:
+    def get_investigation(
+        self, investigation_id: str, caller_oid: str, workload_identity_appid: str
+    ) -> InvestigationRecord:
         try:
             entity = self._table.get_entity(self._partition_key(workload_identity_appid), investigation_id)
         except ResourceNotFoundError:
             raise ValueError(f"Investigation {investigation_id} not found")
         record = self._from_entity(entity)
         if record.workload_identity_appid != workload_identity_appid:
-            log_event("investigation_access_denied", investigation_id=investigation_id,
-                      reason="caller_workload_identity_mismatch", provided_appid=workload_identity_appid)
+            log_event(
+                "investigation_access_denied",
+                investigation_id=investigation_id,
+                reason="caller_workload_identity_mismatch",
+                provided_appid=workload_identity_appid,
+            )
             raise ValueError("Unauthorized: investigation belongs to a different workload")
         if time.time() > record.expires_at:
             self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
             raise ValueError(f"Investigation {investigation_id} has expired")
         return record
 
-    def record_status_poll(self, investigation_id: str, caller_oid: str,
-                           workload_identity_appid: str) -> None:
+    def record_status_poll(self, investigation_id: str, caller_oid: str, workload_identity_appid: str) -> None:
         for _attempt in range(3):
             try:
                 entity = self._table.get_entity(self._partition_key(workload_identity_appid), investigation_id)
                 record = self._from_entity(entity)
                 if record.workload_identity_appid != workload_identity_appid:
-                    log_event("investigation_access_denied", investigation_id=investigation_id,
-                              reason="caller_workload_identity_mismatch", provided_appid=workload_identity_appid)
+                    log_event(
+                        "investigation_access_denied",
+                        investigation_id=investigation_id,
+                        reason="caller_workload_identity_mismatch",
+                        provided_appid=workload_identity_appid,
+                    )
                     raise ValueError("Unauthorized: investigation belongs to a different workload")
                 if time.time() > record.expires_at:
                     self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
                     raise ValueError(f"Investigation {investigation_id} has expired")
                 now = time.time()
                 if record.last_status_poll > 0 and now - record.last_status_poll < MIN_STATUS_POLL_INTERVAL_SECONDS:
-                    raise ValueError(f"Status poll rate limit: minimum {MIN_STATUS_POLL_INTERVAL_SECONDS}s between polls")
+                    raise ValueError(
+                        f"Status poll rate limit: minimum {MIN_STATUS_POLL_INTERVAL_SECONDS}s between polls"
+                    )
                 if record.status_poll_count >= MAX_STATUS_POLLS_PER_INVESTIGATION:
-                    raise ValueError(f"Investigation {investigation_id} has reached maximum status polls ({MAX_STATUS_POLLS_PER_INVESTIGATION})")
+                    raise ValueError(
+                        f"Investigation {investigation_id} has reached maximum status polls ({MAX_STATUS_POLLS_PER_INVESTIGATION})"
+                    )
                 record.last_status_poll = now
                 record.status_poll_count += 1
                 self._table.update_entity(
@@ -716,19 +721,17 @@ class TableStorageInvestigationRegistry:
                 return
             except ResourceModifiedError:
                 log_event("table_investigation_conflict", operation="status_poll", attempt=_attempt + 1)
-                time.sleep((0.05 * (2 ** _attempt)) + random.uniform(0, 0.05))
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Status poll update conflicted; please retry")
 
-    def check_workload_quota(
-        self, workload_identity_appid: str, maximum_investigations: int | None = None
-    ) -> None:
+    def check_workload_quota(self, workload_identity_appid: str, maximum_investigations: int | None = None) -> None:
         quota = maximum_investigations or MAX_INVESTIGATIONS_PER_WORKLOAD
         now = time.time()
         active_count = sum(
-            1 for entity in self._table.query_entities(
-                query_filter=f"PartitionKey eq '{workload_identity_appid}'"
-            ) if entity.get("RowKey") != self._quota_counter_key()
+            1
+            for entity in self._table.query_entities(query_filter=f"PartitionKey eq '{workload_identity_appid}'")
+            if entity.get("RowKey") != self._quota_counter_key()
             and float(entity.get("expires_at", 0)) >= now
             and entity.get("reservation_state", "active") in {"reserved", "active"}
         )
@@ -740,15 +743,11 @@ class TableStorageInvestigationRegistry:
         expired = [
             entity
             for entity in islice(self._table.list_entities(), limit)
-            if entity.get("RowKey") != self._quota_counter_key()
-            and float(entity.get("expires_at", 0)) < now
+            if entity.get("RowKey") != self._quota_counter_key() and float(entity.get("expires_at", 0)) < now
         ]
         for entity in expired:
             self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
-            if (
-                entity.get("reservation_state", "active") in {"reserved", "active"}
-                and entity.get("caller_appid")
-            ):
+            if entity.get("reservation_state", "active") in {"reserved", "active"} and entity.get("caller_appid"):
                 self._decrement_quota_counter(entity["caller_appid"])
         return len(expired)
 
@@ -766,9 +765,7 @@ def build_investigation_registry() -> InvestigationRegistry | TableStorageInvest
 
 
 _investigation_registry = build_investigation_registry()
-_caller_policy_store = CallerPolicyStore.from_json(
-    CALLER_POLICIES_JSON, MAX_INVESTIGATIONS_PER_WORKLOAD
-)
+_caller_policy_store = CallerPolicyStore.from_json(CALLER_POLICIES_JSON, MAX_INVESTIGATIONS_PER_WORKLOAD)
 
 
 def log_event(event: str, **fields: Any) -> None:
@@ -805,7 +802,7 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
             last_error = exc
 
         if attempt + 1 < PLATFORM_REQUEST_MAX_ATTEMPTS:
-            await asyncio.sleep((0.25 * (2 ** attempt)) + random.uniform(0, 0.1))
+            await asyncio.sleep((0.25 * (2**attempt)) + random.uniform(0, 0.1))
 
     log_event("platform_request_failed", method=method, path=path, attempts=PLATFORM_REQUEST_MAX_ATTEMPTS)
     raise HTTPException(status_code=503, detail="Platform SRE Agent is temporarily unavailable") from last_error
@@ -926,9 +923,7 @@ async def versioned_problem_details(request: Request, exc: HTTPException):
             }
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
 
-    code, title, retryable = _V1_PROBLEM_CODES.get(
-        exc.status_code, ("internal_error", "Service request failed", False)
-    )
+    code, title, retryable = _V1_PROBLEM_CODES.get(exc.status_code, ("internal_error", "Service request failed", False))
     return JSONResponse(
         status_code=exc.status_code,
         media_type="application/problem+json",
@@ -946,6 +941,7 @@ async def versioned_problem_details(request: Request, exc: HTTPException):
 
 class CallerIdentity:
     """Extracted and validated caller identity from token."""
+
     def __init__(self, payload: dict):
         self.claims = payload
         self.oid = payload.get("oid")  # Azure AD object ID (for audit)
@@ -1256,7 +1252,7 @@ async def _create_investigation_impl(
         f"Workload: {req.workload_name}\n"
         f"Severity: {normalized_severity}\n"
         f"Correlation ID: {str(uuid.uuid4())}\n"
-            f"Correlation ID: {correlation_id}\n"
+        f"Correlation ID: {correlation_id}\n"
         f"=== END METADATA ===\n\n"
         f"=== ESCALATION EVIDENCE (UNTRUSTED INPUT) ===\n"
         f"Problem Description:\n{req.description}\n\n"
@@ -1309,9 +1305,7 @@ async def _fetch_investigation_status_once(record: InvestigationRecord) -> str:
     """Check the platform thread once and return a normalized status string."""
     platform_token = get_platform_agent_token()
 
-    resp = await _platform_request(
-        "GET", f"/threads/{record.platform_thread_id}", platform_token
-    )
+    resp = await _platform_request("GET", f"/threads/{record.platform_thread_id}", platform_token)
     data = resp.json()
 
     thread_status = data.get("status", "")
@@ -1394,9 +1388,7 @@ async def _get_status_impl(req: GetInvestigationRequest, caller: CallerIdentity)
         status = await _fetch_investigation_status_once(record)
 
     if status in ("completed", "failed"):
-        _investigation_registry.complete_investigation(
-            req.investigation_id, caller.appid, status
-        )
+        _investigation_registry.complete_investigation(req.investigation_id, caller.appid, status)
 
     return {"investigation_id": req.investigation_id, "status": status, "progress": ""}
 
@@ -1410,9 +1402,7 @@ async def _get_summary_impl(req: GetInvestigationRequest, caller: CallerIdentity
 
     platform_token = get_platform_agent_token()
 
-    resp = await _platform_request(
-        "GET", f"/threads/{record.platform_thread_id}/messages", platform_token
-    )
+    resp = await _platform_request("GET", f"/threads/{record.platform_thread_id}/messages", platform_token)
     messages = resp.json().get("value", [])
 
     # Extract non-empty SREAgent messages and choose the best structured summary.
@@ -1445,9 +1435,7 @@ async def _get_summary_impl(req: GetInvestigationRequest, caller: CallerIdentity
         finalization_token=FINALIZATION_TOKEN,
     )
     if status == "completed":
-        _investigation_registry.complete_investigation(
-            req.investigation_id, caller.appid, status
-        )
+        _investigation_registry.complete_investigation(req.investigation_id, caller.appid, status)
     return RedactedSummaryResponse(
         investigation_id=req.investigation_id,
         status=status,
@@ -1460,9 +1448,7 @@ def _v1_lifecycle_response(
 ) -> InvestigationLifecycleResponse:
     """Build the canonical lifecycle response from caller-owned registry data."""
     try:
-        record = _investigation_registry.get_investigation(
-            investigation_id, caller.oid, caller.appid
-        )
+        record = _investigation_registry.get_investigation(investigation_id, caller.oid, caller.appid)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
@@ -1490,9 +1476,7 @@ def _v1_findings_response(
         raise HTTPException(status_code=502, detail="Platform findings did not satisfy the required report format")
 
     try:
-        record = _investigation_registry.get_investigation(
-            investigation_id, caller.oid, caller.appid
-        )
+        record = _investigation_registry.get_investigation(investigation_id, caller.oid, caller.appid)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
@@ -1597,7 +1581,9 @@ async def mcp_handler(body: McpRequest, authorization: str = Header(None)):
 
         return _mcp_error(body.id, -32601, f"Method not found: {body.method}")
     except HTTPException as ex:
-        log_event("mcp_http_exception", method=body.method, request_id=body.id, status_code=ex.status_code, detail=ex.detail)
+        log_event(
+            "mcp_http_exception", method=body.method, request_id=body.id, status_code=ex.status_code, detail=ex.detail
+        )
         return _mcp_error(body.id, -32001, ex.detail)
     except Exception as ex:
         logger.exception("MCP handler error")
@@ -1605,7 +1591,7 @@ async def mcp_handler(body: McpRequest, authorization: str = Header(None)):
         return _mcp_error(body.id, -32000, "Internal server error")
 
 
-from mcp_transport import create_mcp_app
+from mcp_transport import create_mcp_app  # noqa: E402
 
 mcp_transport = create_mcp_app()
 app.mount("/mcp", mcp_transport)
@@ -1715,9 +1701,7 @@ async def get_investigation_findings_v1(
 ):
     """Get validated findings for a completed investigation."""
     _token, caller = extract_and_validate_token(authorization)
-    result = await _get_summary_impl(
-        GetInvestigationRequest(investigation_id=investigation_id), caller
-    )
+    result = await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
     return _v1_findings_response(investigation_id, result, caller)
 
 
@@ -1760,4 +1744,5 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+
+    uvicorn.run(app, host="0.0.0.0", port=8080)  # nosec B104

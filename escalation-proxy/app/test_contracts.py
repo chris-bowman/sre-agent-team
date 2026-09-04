@@ -11,7 +11,6 @@ from contracts import (
     ProblemDetails,
 )
 
-
 LIFECYCLE = {
     "investigation_id": "f57afdb4-348f-40aa-b29d-886f4bce5332",
     "status": "running",

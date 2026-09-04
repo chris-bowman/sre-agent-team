@@ -22,8 +22,7 @@ def test_registered_caller_policy_enforces_severity_and_quota():
 
 def test_configured_policy_rejects_disabled_and_unregistered_callers():
     store = CallerPolicyStore.from_json(
-        '[{"appid":"caller-disabled","enabled":false,'
-        '"maximum_concurrent_investigations":1}]',
+        '[{"appid":"caller-disabled","enabled":false,"maximum_concurrent_investigations":1}]',
         default_quota=10,
     )
 

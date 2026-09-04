@@ -348,10 +348,10 @@ Do not start production networking or repository-wide terminology changes before
 
 **Goal:** Prevent contract, security, deployment, and compatibility regressions.
 
-- [ ] P8.1 Add CI for pinned dependency installation, formatting, linting, typing, and security checks.
+- [x] P8.1 Add CI for pinned dependency installation, formatting, linting, typing, and security checks.
 - [x] P8.2 Run unit, HTTP contract, and registry contract suites in CI.
 - [x] P8.3 Build all Bicep entry points and validate PowerShell scripts.
-- [ ] P8.4 Build and scan the container image.
+- [x] P8.4 Build and scan the container image.
 - [x] P8.5 Check generated OpenAPI and schema compatibility.
 - [x] P8.6 Remove generated ARM JSON from source control; Bicep source is authoritative and templates are rebuilt during validation.
 - [x] P8.7 Add a staging end-to-end test with two independent caller identities. Overlapping WorkloadApp and WorkloadIsolation investigations completed on separate caller partitions on 2026-09-01, and a fresh simultaneous two-caller smoke passed after restoration on 2026-09-04.
@@ -369,7 +369,7 @@ A v1 release is allowed only when all of the following are true:
 - [x] The Azure SRE Agent connector passes the same three-tool flow.
 - [x] HTTP OpenAPI compatibility checks pass.
 - [x] Multi-replica and restart tests preserve ownership and state. Two-replica lifecycle and in-flight rolling restart survival passed on 2026-09-01.
-- [ ] Security scans pass or have explicitly accepted findings.
+- [x] Security scans pass or have explicitly accepted findings. CI gates dependency vulnerabilities, medium/high source findings, and fixable high/critical container findings; unfixed base-image advisories remain visible in Trivy reports, and low-severity non-cryptographic retry jitter is accepted.
 - [ ] Manual log inspection finds no tokens, platform thread IDs, or unredacted sensitive findings.
 
 ## Affected Files

@@ -12,45 +12,40 @@ Covers:
   - Rate limiting and expiry
 """
 
-import pytest
-import json
 import time
-import httpx
 from contextlib import asynccontextmanager
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import jwt as pyjwt
+import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-import jwt as pyjwt
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp_transport import create_mcp_app
 
 from main import (
-    app,
-    InvestigationRegistry,
-    InvestigationRecord,
+    MAX_INVESTIGATION_CONTEXT_SIZE,
+    MAX_INVESTIGATION_DESCRIPTION_SIZE,
+    MAX_INVESTIGATIONS_PER_WORKLOAD,
+    MAX_STATUS_POLLS_PER_INVESTIGATION,
+    MAX_STATUS_WAIT_SECONDS,
     CallerIdentity,
     CreateInvestigationRequest,
     GetInvestigationRequest,
-    validate_caller_token,
-    INVESTIGATION_EXPIRY_SECONDS,
-    MIN_STATUS_POLL_INTERVAL_SECONDS,
-    MAX_STATUS_POLLS_PER_INVESTIGATION,
-    MAX_STATUS_WAIT_SECONDS,
-    MAX_INVESTIGATION_DESCRIPTION_SIZE,
-    MAX_INVESTIGATION_CONTEXT_SIZE,
-    MAX_WORKLOAD_NAME_SIZE,
-    MAX_INVESTIGATIONS_PER_WORKLOAD,
-    ALLOWED_SEVERITY_LEVELS,
-    redact_sensitive_text,
-    validate_requested_severity,
+    InvestigationRecord,
+    InvestigationRegistry,
     RedactedSummaryResponse,
     TableStorageInvestigationRegistry,
     _create_investigation_impl,
     _get_status_impl,
     _get_summary_impl,
     _platform_request,
+    app,
+    redact_sensitive_text,
+    validate_requested_severity,
 )
+from mcp_transport import create_mcp_app
 
 
 @pytest.fixture
@@ -247,11 +242,13 @@ def test_create_investigation_rejects_oversized_description():
     with patch("main.extract_and_validate_token") as mock_auth:
         mock_auth.return_value = (
             "fake_token",
-            CallerIdentity({
-                "appid": "appid1",
-                "oid": "oid1",
-                "roles": ["EscalationCaller"],
-            }),
+            CallerIdentity(
+                {
+                    "appid": "appid1",
+                    "oid": "oid1",
+                    "roles": ["EscalationCaller"],
+                }
+            ),
         )
         response = client.post("/api/investigations", json=payload)
 
@@ -276,11 +273,13 @@ def test_create_investigation_rejects_oversized_context():
     with patch("main.extract_and_validate_token") as mock_auth:
         mock_auth.return_value = (
             "fake_token",
-            CallerIdentity({
-                "appid": "appid1",
-                "oid": "oid1",
-                "roles": ["EscalationCaller"],
-            }),
+            CallerIdentity(
+                {
+                    "appid": "appid1",
+                    "oid": "oid1",
+                    "roles": ["EscalationCaller"],
+                }
+            ),
         )
         response = client.post("/api/investigations", json=payload)
 
@@ -301,11 +300,13 @@ def test_create_investigation_rejects_invalid_severity():
     with patch("main.extract_and_validate_token") as mock_auth:
         mock_auth.return_value = (
             "fake_token",
-            CallerIdentity({
-                "appid": "appid1",
-                "oid": "oid1",
-                "roles": ["EscalationCaller"],
-            }),
+            CallerIdentity(
+                {
+                    "appid": "appid1",
+                    "oid": "oid1",
+                    "roles": ["EscalationCaller"],
+                }
+            ),
         )
         response = client.post("/api/investigations", json=payload)
 
@@ -326,11 +327,13 @@ def test_create_investigation_rejects_empty_description():
     with patch("main.extract_and_validate_token") as mock_auth:
         mock_auth.return_value = (
             "fake_token",
-            CallerIdentity({
-                "appid": "appid1",
-                "oid": "oid1",
-                "roles": ["EscalationCaller"],
-            }),
+            CallerIdentity(
+                {
+                    "appid": "appid1",
+                    "oid": "oid1",
+                    "roles": ["EscalationCaller"],
+                }
+            ),
         )
         response = client.post("/api/investigations", json=payload)
 
@@ -426,11 +429,13 @@ def test_prompt_injection_in_description_is_escaped():
     with patch("main.extract_and_validate_token") as mock_auth:
         mock_auth.return_value = (
             "fake_token",
-            CallerIdentity({
-                "appid": "appid1",
-                "oid": "oid1",
-                "roles": ["EscalationCaller"],
-            }),
+            CallerIdentity(
+                {
+                    "appid": "appid1",
+                    "oid": "oid1",
+                    "roles": ["EscalationCaller"],
+                }
+            ),
         )
 
         with patch("main._investigation_registry.create_investigation") as mock_registry:
@@ -443,7 +448,7 @@ def test_prompt_injection_in_description_is_escaped():
                         json=lambda: {"id": "thread-123"},
                     )
 
-                    response = client.post("/api/investigations", json=payload)
+                    client.post("/api/investigations", json=payload)
 
         # Verify the injection attempt was safely enclosed
         assert mock_post.called
@@ -524,10 +529,12 @@ async def test_failed_platform_creation_releases_reserved_quota_slot(registry):
     )
     policy = MagicMock(maximum_concurrent_investigations=1)
 
-    with patch("main._investigation_registry", registry), \
-         patch("main._caller_policy_store.authorize", return_value=policy), \
-         patch("main.get_platform_agent_token", return_value="platform-token"), \
-         patch("main._platform_request", new_callable=AsyncMock, side_effect=HTTPException(status_code=503)):
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+        patch("main._platform_request", new_callable=AsyncMock, side_effect=HTTPException(status_code=503)),
+    ):
         with pytest.raises(HTTPException):
             await _create_investigation_impl(request, caller)
 
@@ -546,11 +553,11 @@ async def test_terminal_status_releases_quota_slot(registry):
         severity="high",
     )
 
-    with patch("main._investigation_registry", registry), \
-         patch("main._fetch_investigation_status_once", AsyncMock(return_value="completed")):
-        result = await _get_status_impl(
-            GetInvestigationRequest(investigation_id=investigation_id), caller
-        )
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._fetch_investigation_status_once", AsyncMock(return_value="completed")),
+    ):
+        result = await _get_status_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
 
     assert result["status"] == "completed"
     assert registry.get_investigation(investigation_id, "oid1", "appid1").reservation_state == "completed"
@@ -587,12 +594,12 @@ async def test_finalized_summary_releases_quota_slot(registry):
         },
     )
 
-    with patch("main._investigation_registry", registry), \
-         patch("main.get_platform_agent_token", return_value="platform-token"), \
-         patch("main._platform_request", AsyncMock(return_value=platform_response)):
-        result = await _get_summary_impl(
-            GetInvestigationRequest(investigation_id=investigation_id), caller
-        )
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+        patch("main._platform_request", AsyncMock(return_value=platform_response)),
+    ):
+        result = await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
 
     assert result["status"] == "completed"
     assert registry.get_investigation(investigation_id, "oid1", "appid1").reservation_state == "completed"
@@ -634,10 +641,12 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
     policy = MagicMock(maximum_concurrent_investigations=1)
     platform_response = MagicMock(status_code=202, json=lambda: {"id": "private-thread-id"})
 
-    with patch("main._investigation_registry", registry), \
-         patch("main._caller_policy_store.authorize", return_value=policy), \
-         patch("main.get_platform_agent_token", return_value="platform-token"), \
-         patch("main._platform_request", new_callable=AsyncMock, return_value=platform_response) as platform_request:
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+        patch("main._platform_request", new_callable=AsyncMock, return_value=platform_response) as platform_request,
+    ):
         result = await _create_investigation_impl(request, caller)
 
     record = registry.get_investigation(result["investigation_id"], "oid1", "appid1")
@@ -708,7 +717,12 @@ def test_table_registry_entity_round_trip_preserves_security_fields():
 def test_table_reservation_submits_counter_and_reservation_transaction():
     class FakeTable:
         def __init__(self):
-            self.counter = {"PartitionKey": "appid1", "RowKey": "__quota_counter__", "active_count": 0, "etag": "etag-1"}
+            self.counter = {
+                "PartitionKey": "appid1",
+                "RowKey": "__quota_counter__",
+                "active_count": 0,
+                "etag": "etag-1",
+            }
             self.operations = None
 
         def list_entities(self):
@@ -905,9 +919,7 @@ def test_liveness_check_does_not_require_dependencies():
 
 def test_v1_create_uses_caller_label_and_canonical_lifecycle_response():
     client = TestClient(app)
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     lifecycle = {
         "schema_version": "1.0",
         "investigation_id": "f57afdb4-348f-40aa-b29d-886f4bce5332",
@@ -947,9 +959,7 @@ def test_v1_create_uses_caller_label_and_canonical_lifecycle_response():
 
 def test_v1_status_forwards_wait_seconds_and_returns_canonical_response():
     client = TestClient(app)
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     lifecycle = {
         "schema_version": "1.0",
         "investigation_id": "f57afdb4-348f-40aa-b29d-886f4bce5332",
@@ -980,9 +990,7 @@ def test_v1_status_forwards_wait_seconds_and_returns_canonical_response():
 
 def test_v1_findings_rejects_non_terminal_investigation():
     client = TestClient(app)
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
 
     with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
         with patch("main._get_summary_impl", new_callable=AsyncMock) as summary_impl:
@@ -1064,9 +1072,7 @@ def test_openapi_includes_versioned_investigation_contract():
 
 def test_official_mcp_transport_initializes_with_lifespan():
     client = TestClient(create_mcp_test_app())
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
         with client:
             response = client.post(
@@ -1103,9 +1109,7 @@ def test_official_mcp_transport_initializes_with_lifespan():
 @pytest.mark.asyncio
 async def test_official_mcp_client_negotiates_and_discovers_exact_tools():
     test_app = create_mcp_test_app()
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
 
     with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
         async with test_app.router.lifespan_context(test_app):
@@ -1136,9 +1140,7 @@ async def test_official_mcp_client_negotiates_and_discovers_exact_tools():
 @pytest.mark.asyncio
 async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
     test_app = create_mcp_test_app()
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
 
     with (
         patch("main.extract_and_validate_token", return_value=("ignored", caller)),
@@ -1191,9 +1193,7 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
 @pytest.mark.asyncio
 async def test_official_mcp_transport_returns_standard_protocol_errors():
     test_app = create_mcp_test_app()
-    caller = CallerIdentity(
-        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
-    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
 
     with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
         async with test_app.router.lifespan_context(test_app):
@@ -1349,14 +1349,20 @@ def test_registry_cleanup_respects_batch_limit(registry):
 async def test_status_long_poll_returns_immediately_with_no_wait(registry):
     """wait_seconds=0 (default) should not sleep and return the first result."""
     inv_id = registry.create_investigation(
-        caller_oid="oid1", caller_appid="appid1", workload_name="workload-a",
-        workload_identity_appid="appid1", platform_thread_id="thread1", severity="high",
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
     )
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
 
-    with patch("main._investigation_registry", registry), \
-         patch("main._fetch_investigation_status_once", AsyncMock(return_value="running")) as mock_fetch, \
-         patch("main.asyncio.sleep", AsyncMock()) as mock_sleep:
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._fetch_investigation_status_once", AsyncMock(return_value="running")) as mock_fetch,
+        patch("main.asyncio.sleep", AsyncMock()) as mock_sleep,
+    ):
         result = await _get_status_impl(GetInvestigationRequest(investigation_id=inv_id), caller)
 
     assert result["status"] == "running"
@@ -1368,17 +1374,21 @@ async def test_status_long_poll_returns_immediately_with_no_wait(registry):
 async def test_status_long_poll_exits_early_on_completion(registry):
     """Long-poll should stop as soon as status becomes completed, not exhaust the wait budget."""
     inv_id = registry.create_investigation(
-        caller_oid="oid1", caller_appid="appid1", workload_name="workload-a",
-        workload_identity_appid="appid1", platform_thread_id="thread1", severity="high",
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
     )
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
 
-    with patch("main._investigation_registry", registry), \
-         patch("main._fetch_investigation_status_once", AsyncMock(side_effect=["running", "completed"])) as mock_fetch, \
-         patch("main.asyncio.sleep", AsyncMock()) as mock_sleep:
-        result = await _get_status_impl(
-            GetInvestigationRequest(investigation_id=inv_id, wait_seconds=30), caller
-        )
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._fetch_investigation_status_once", AsyncMock(side_effect=["running", "completed"])) as mock_fetch,
+        patch("main.asyncio.sleep", AsyncMock()) as mock_sleep,
+    ):
+        result = await _get_status_impl(GetInvestigationRequest(investigation_id=inv_id, wait_seconds=30), caller)
 
     assert result["status"] == "completed"
     assert mock_fetch.call_count == 2

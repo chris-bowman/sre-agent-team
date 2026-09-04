@@ -6,8 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-CONTRACT_SCHEMA_VERSION = "1.0"
+CONTRACT_SCHEMA_VERSION: Literal["1.0"] = "1.0"
 InvestigationStatus = Literal["pending", "running", "completed", "failed", "expired"]
 Severity = Literal["low", "medium", "high", "critical"]
 

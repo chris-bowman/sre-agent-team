@@ -1,7 +1,7 @@
 """Official MCP Streamable HTTP transport for the escalation service."""
 
-from contextvars import ContextVar
 import os
+from contextvars import ContextVar
 from typing import Any
 
 from fastapi import HTTPException
@@ -10,7 +10,6 @@ from mcp.server.fastmcp.server import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-
 
 _caller: ContextVar[Any] = ContextVar("mcp_caller", default=None)
 
@@ -23,11 +22,13 @@ class McpProbeAndTransport:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and scope["method"] == "GET":
             body = b'{"status":"ok","protocol":"mcp","version":"2024-11-05"}'
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-type", b"application/json")],
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
             await send({"type": "http.response.body", "body": body})
             return
         await self.transport(scope, receive, send)
@@ -77,9 +78,8 @@ def create_mcp_app():
         json_response=True,
         stateless_http=True,
         transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=os.environ.get(
-                "MCP_ENABLE_DNS_REBINDING_PROTECTION", "true"
-            ).lower() == "true",
+            enable_dns_rebinding_protection=os.environ.get("MCP_ENABLE_DNS_REBINDING_PROTECTION", "true").lower()
+            == "true",
             allowed_hosts=allowed_hosts,
             allowed_origins=[],
         ),

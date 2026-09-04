@@ -27,7 +27,8 @@ This checkpoint reflects the repo and deployment state as of 2026-09-04 and shou
 - The workload-facing final reports intentionally omit the consumed finalization token; proxy audit events and MCP results are the authoritative completion evidence.
 - No matching Table, ETag, quota, storage, `ERROR`, or `Traceback` events were observed in the restored revision logs.
 - Validation remains green: 58 proxy tests, 8 PowerShell parses, and 6 Bicep builds.
-- Repository cleanup removed regenerable ARM JSON and transient test/build artifacts, archived the completed Phase 0 security summary and presentation script under `docs/archive`, and updated ignore rules. Bicep source remains authoritative for generated ARM templates. Git is initialized on branch `main`; no initial commit has been created.
+- Repository cleanup removed regenerable ARM JSON and transient test/build artifacts, archived the completed Phase 0 security summary and presentation script under `docs/archive`, and updated ignore rules. Bicep source remains authoritative for generated ARM templates. Git is initialized on branch `main` with initial commit `4b72b57`.
+- Official MCP SDK conformance coverage now validates initialization, initialized notifications, ping heartbeats, exact three-tool discovery, all supported calls, malformed requests, unknown methods and tools, authorization failures, and reconnects through fresh client sessions.
 
 ### Fresh deployment validation (2026-09-01)
 
@@ -162,7 +163,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P2.4 Route MCP and HTTP through the same existing domain implementation methods.
 - [x] P2.5 Replace the hand-written MCP dispatcher with the pinned official Python MCP SDK Streamable HTTP transport.
 - [x] P2.6 Carry the verified caller identity through dispatch without unverified token decoding.
-- [ ] P2.7 Add official-client MCP conformance tests and Azure SRE connector regression coverage.
+- [x] P2.7 Add official-client MCP conformance tests and Azure SRE connector regression coverage.
 
 ### WP2 Acceptance Criteria
 
@@ -364,7 +365,7 @@ A v1 release is allowed only when all of the following are true:
 
 - [x] Immutable redeployment preserves the Entra audience and existing caller grants. Verified on 2026-09-04 with the stable client ID, app role ID, five caller grants, and both connectors intact.
 - [x] Private Table access works under the target policy environment.
-- [ ] An official MCP SDK client passes the supported protocol flow.
+- [x] An official MCP SDK client passes the supported protocol flow.
 - [x] The Azure SRE Agent connector passes the same three-tool flow.
 - [x] HTTP OpenAPI compatibility checks pass.
 - [x] Multi-replica and restart tests preserve ownership and state. Two-replica lifecycle and in-flight rolling restart survival passed on 2026-09-01.

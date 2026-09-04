@@ -15,10 +15,15 @@ Covers:
 import pytest
 import json
 import time
+import httpx
+from contextlib import asynccontextmanager
 from unittest.mock import patch, AsyncMock, MagicMock
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import jwt as pyjwt
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from mcp_transport import create_mcp_app
 
 from main import (
     app,
@@ -58,6 +63,20 @@ def client():
 def registry():
     """Fresh registry for each test."""
     return InvestigationRegistry()
+
+
+def create_mcp_test_app():
+    transport = create_mcp_app()
+    test_app = FastAPI()
+    test_app.mount("/mcp", transport)
+
+    @asynccontextmanager
+    async def lifespan(_application):
+        async with transport.server.session_manager.run():
+            yield
+
+    test_app.router.lifespan_context = lifespan
+    return test_app
 
 
 @pytest.fixture
@@ -1044,7 +1063,7 @@ def test_openapi_includes_versioned_investigation_contract():
 
 
 def test_official_mcp_transport_initializes_with_lifespan():
-    client = TestClient(app)
+    client = TestClient(create_mcp_test_app())
     caller = CallerIdentity(
         {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
     )
@@ -1079,6 +1098,128 @@ def test_official_mcp_transport_initializes_with_lifespan():
         "get_investigation_status",
         "get_investigation_summary",
     }
+
+
+@pytest.mark.asyncio
+async def test_official_mcp_client_negotiates_and_discovers_exact_tools():
+    test_app = create_mcp_test_app()
+    caller = CallerIdentity(
+        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
+    )
+
+    with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
+        async with test_app.router.lifespan_context(test_app):
+            for _ in range(2):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=test_app),
+                    base_url="http://testserver",
+                    headers={"Authorization": "Bearer ignored"},
+                ) as http_client:
+                    async with streamable_http_client(
+                        "http://testserver/mcp/",
+                        http_client=http_client,
+                    ) as (read_stream, write_stream, _get_session_id):
+                        async with ClientSession(read_stream, write_stream) as session:
+                            initialize_result = await session.initialize()
+                            ping_result = await session.send_ping()
+                            tools_result = await session.list_tools()
+
+    assert initialize_result.serverInfo.name == "platform-escalation-proxy"
+    assert ping_result is not None
+    assert {tool.name for tool in tools_result.tools} == {
+        "create_platform_investigation",
+        "get_investigation_status",
+        "get_investigation_summary",
+    }
+
+
+@pytest.mark.asyncio
+async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
+    test_app = create_mcp_test_app()
+    caller = CallerIdentity(
+        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
+    )
+
+    with (
+        patch("main.extract_and_validate_token", return_value=("ignored", caller)),
+        patch("main._create_investigation_impl", new_callable=AsyncMock) as create_impl,
+        patch("main._get_status_impl", new_callable=AsyncMock) as status_impl,
+        patch("main._get_summary_impl", new_callable=AsyncMock) as summary_impl,
+    ):
+        create_impl.return_value = {"investigation_id": "inv-123", "status": "pending"}
+        status_impl.return_value = {"investigation_id": "inv-123", "status": "running"}
+        summary_impl.return_value = {"investigation_id": "inv-123", "status": "completed"}
+
+        async with test_app.router.lifespan_context(test_app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=test_app),
+                base_url="http://testserver",
+                headers={"Authorization": "Bearer ignored"},
+            ) as http_client:
+                async with streamable_http_client(
+                    "http://testserver/mcp/",
+                    http_client=http_client,
+                ) as (read_stream, write_stream, _get_session_id):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        create_result = await session.call_tool(
+                            "create_platform_investigation",
+                            {
+                                "description": "Investigate a service failure.",
+                                "workload_name": "reference-consumer",
+                            },
+                        )
+                        status_result = await session.call_tool(
+                            "get_investigation_status",
+                            {"investigation_id": "inv-123"},
+                        )
+                        summary_result = await session.call_tool(
+                            "get_investigation_summary",
+                            {"investigation_id": "inv-123"},
+                        )
+                        unknown_result = await session.call_tool("unknown_tool", {})
+
+    assert not create_result.isError
+    assert not status_result.isError
+    assert not summary_result.isError
+    assert unknown_result.isError
+    assert create_impl.await_args.args[1] is caller
+    assert status_impl.await_args.args[1] is caller
+    assert summary_impl.await_args.args[1] is caller
+
+
+@pytest.mark.asyncio
+async def test_official_mcp_transport_returns_standard_protocol_errors():
+    test_app = create_mcp_test_app()
+    caller = CallerIdentity(
+        {"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]}
+    )
+
+    with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
+        async with test_app.router.lifespan_context(test_app):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=test_app),
+                base_url="http://testserver",
+                headers={
+                    "Authorization": "Bearer ignored",
+                    "Accept": "application/json, text/event-stream",
+                },
+            ) as http_client:
+                malformed_response = await http_client.post("/mcp/", json={"invalid": True})
+                unknown_method_response = await http_client.post(
+                    "/mcp/",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 99,
+                        "method": "unknown/method",
+                        "params": {},
+                    },
+                )
+
+    assert malformed_response.status_code == 400
+    assert malformed_response.json()["error"]["code"] == -32602
+    assert unknown_method_response.status_code == 200
+    assert unknown_method_response.json()["error"]["code"] == -32602
 
 
 def test_official_mcp_transport_returns_auth_error_without_server_failure():

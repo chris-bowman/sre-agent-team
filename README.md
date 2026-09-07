@@ -350,6 +350,18 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `StoragePrivateEndpointSubnetPrefix` | No | `10.42.1.0/28` | Storage private endpoint subnet prefix. |
 | `McpEnableDnsRebindingProtection` | No | `true` | Controls MCP SDK DNS-rebinding protection. Disable only for a confirmed host-validation compatibility issue. |
 
+### scripts/deploy-escalation-monitoring.ps1
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `ResourceGroup` | Yes | n/a | Resource group containing the proxy Log Analytics workspace. |
+| `SubscriptionId` | Yes | n/a | Subscription used for the monitoring deployment. |
+| `ProxyAppName` | No | `sre-escalation-proxy` | Container App name used to scope the log queries and name the alert rules. |
+| `LogAnalyticsWorkspaceName` | No | `<ProxyAppName>-logs` | Existing workspace receiving the Container App console logs. |
+| `AlertActionGroupResourceId` | No | `''` | Existing Azure Monitor action group resource ID. Empty deploys alert detection without notifications. |
+| `AlertsEnabled` | No | `true` | Enables or disables both scheduled-query rules. |
+| `Location` | No | `australiaeast` | Azure region for the scheduled-query rules. |
+
 ### scripts/deploy-workload.ps1
 
 | Parameter | Required | Default | Description |

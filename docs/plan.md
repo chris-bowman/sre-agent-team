@@ -23,7 +23,7 @@ This checkpoint reflects the repo and deployment state as of 2026-09-07 and shou
 - Deployment now refuses to proceed when the existing latest-ready revision is inactive, uses unique immutable image tags resolved to ACR digests, and waits with a bounded retry loop for App Configuration data-plane RBAC propagation before ARM deployment.
 - Caller policy authority moved to Azure App Configuration key `escalation/caller-policies` with label `production`. Routine deployment seeds only when the key is absent, preserving operator-managed policy. Quoted ETag conditional writes and terminating REST failures prevent false-success policy updates. Five production caller policies remain registered.
 - App Configuration refresh uses a bounded cache and valid last-known-good snapshot. Startup fails closed without an initial policy, and readiness fails when no current or acceptable last-known-good policy exists.
-- Platform dependency calls now use explicit timeouts, bounded retries with jitter, a circuit breaker, and safe `503` responses. Registry and Platform SRE Agent dependency failures were exercised against readiness and recovery behavior; alert resources and delivered-alert evidence remain open under P8.9.
+- Platform dependency calls now use explicit timeouts, bounded retries with jitter, a circuit breaker, and safe `503` responses. Registry and Platform SRE Agent dependency failures were exercised against readiness and recovery behavior; alert rules are deployed, while notification routing and delivered-alert evidence remain open under P8.9.
 - Sensitive-log review found that `platform_thread_created` included the platform thread ID. The field was removed, a regression test was added, and the logging-fix image above was deployed. Recent current-revision logs contain no bearer/authorization material, SAS-like values, report bodies, or `platform_thread_id` on the audited lifecycle events.
 - The supported deployment script built the immutable image but was blocked before ARM deployment by Microsoft Graph CAE error `TokenCreatedWithOutdatedPolicies`. The already-built digest was deployed through the Bicep-owned path with existing stable Entra values; a fresh interactive sign-in is still required before the Graph-dependent full script can run normally.
 - After proxy deployment, WorkloadApp's connector regressed to `Connecting` and custom-agent definitions returned `404`. Delete/recreate connector synchronization, custom-agent republish, and bounded status polling restored `platform-escalation-mi` to `Connected`, healthy, with all three tools.
@@ -76,23 +76,22 @@ This checkpoint reflects the repo and deployment state as of 2026-09-07 and shou
 
 ### Still open / release-gated
 
-- **Caller administration and negative authorization**: Independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, restart survival, and live disabled/revoked caller operations are validated. Remaining live idempotency and severity-limit cases are open.
+- **Caller administration and negative authorization**: Complete; independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, restart survival, disabled/revoked callers, live idempotency, and severity-limit enforcement are validated.
 - **Official MCP conformance**: Complete; official-client tests cover negotiation, reconnect behavior, malformed requests, authorization failures, and all supported tool paths.
-- **Outage behavior**: Readiness, retries, safe public errors, and recovery were validated for registry and Platform SRE Agent failures. Deployed alert resources and delivered-alert evidence remain open.
+- **Outage behavior**: Readiness, retries, safe public errors, and recovery were validated for registry and Platform SRE Agent failures. Two scheduled-query alert rules are deployed; notification routing and delivered-alert evidence remain open because no operator-owned action group exists.
 - **Immutable image/release controls**: Complete; deployment resolves the pushed tag to a validated ACR digest, the base image is digest-pinned, and all runtime packages are exact-pinned.
 - **Repository governance files and CI/security checks**: MIT license, contribution guide, security policy, code of conduct, changelog, operations guidance, CI checks, and image scanning are implemented.
 
 ### Highest-priority next actions for the next session
 
-1. **Remaining caller gates (P8.8)**: Run live same-payload idempotency replay and severity-ceiling denial cases.
-2. **Alert delivery gate (P8.9)**: Deploy or configure the documented availability/security alerts and prove notification delivery.
-3. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent full deployment run.
+1. **Alert delivery gate (P8.9)**: Provide an operator-owned Azure Monitor action group, connect the deployed outage rules, and prove notification delivery.
+2. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent full deployment run.
 
 ### Working assumptions for future work
 
 - The platform service remains the primary product; the workload SRE Agent remains a reference consumer example.
 - Azure Table Storage is actively deployed and validated for same-caller quota rejection, terminal slot reuse, cross-replica lifecycle access, restart safety, simultaneous independent callers, and reciprocal cross-caller denial.
-- Future work should finish the two remaining live caller-policy cases and deployed alert-delivery evidence.
+- Future work should finish deployed alert-delivery evidence.
 
 ## Objective
 
@@ -330,7 +329,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P6.6 Emit safe redaction and schema-rejection metrics without sensitive values.
 - [ ] P6.7 Define structured audit events and metrics for authorization, admission, idempotency, quotas, latency, completion, failures, registry health, and platform dependencies.
 - [x] P6.8 Propagate one correlation ID end to end without exposing the platform thread ID.
-- [x] P6.9 Add alert and dashboard guidance for security and availability signals. `docs/operations.md` defines actionable thresholds, response guidance, and safe alert fields; deploying alert resources remains part of P8.9.
+- [x] P6.9 Add alert and dashboard guidance for security and availability signals. `docs/operations.md` defines actionable thresholds, response guidance, safe alert fields, and the standalone monitoring deployment; notification delivery remains part of P8.9.
 
 ### WP6 Acceptance Criteria
 
@@ -370,8 +369,8 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P8.5 Check generated OpenAPI and schema compatibility.
 - [x] P8.6 Remove generated ARM JSON from source control; Bicep source is authoritative and templates are rebuilt during validation.
 - [x] P8.7 Add a staging end-to-end test with two independent caller identities. Overlapping WorkloadApp and WorkloadIsolation investigations completed on separate caller partitions on 2026-09-01, and a fresh simultaneous two-caller smoke passed after restoration on 2026-09-04.
-- [ ] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed. On 2026-09-04, a five-caller allowlist was activated; both workload agents completed positive-path escalations, WorkloadIsolation was denied while disabled and again after revoke, WorkloadApp remained authorized as the control, re-grant recovery succeeded, and all five callers were restored on healthy revision `sre-escalation-proxy--0000020`. Remaining live idempotency and severity-limit cases are open.
-- [ ] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts. Dependency-aware readiness, bounded retry/circuit-breaker behavior, safe `503` responses, and genuine recovery were validated on 2026-09-07. Deployed alert resources and delivered-alert evidence remain open.
+- [x] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed. On 2026-09-04, a five-caller allowlist was activated; both workload agents completed positive-path escalations, WorkloadIsolation was denied while disabled and again after revoke, WorkloadApp remained authorized as the control, re-grant recovery succeeded, and all five callers were restored on healthy revision `sre-escalation-proxy--0000020`. On 2026-09-07, the WorkloadApp connector replayed an identical request under the same idempotency key, rejected a changed payload under that key, and denied a high-severity request while its policy ceiling was temporarily set to low without admitting an investigation. The exact five-caller policy snapshot was restored with ETag protection; all four health endpoints returned `200`, and both replicas remained ready.
+- [ ] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts. Dependency-aware readiness, bounded retry/circuit-breaker behavior, safe `503` responses, and genuine recovery were validated on 2026-09-07. On 2026-09-07, standalone Bicep deployed enabled five-minute scheduled-query rules for policy/readiness and Platform SRE Agent dependency failures; their KQL compiled against the live workspace, and the structured-event predicate matched current production logs. Notification routing and delivered-alert evidence remain open because no operator-owned action group with an enabled receiver exists.
 - [x] P8.10 Verify Azure SRE Agent reference connector compatibility. The fresh WorkloadApp connector completed the create/status/findings lifecycle in staging on 2026-08-27. After the 2026-09-07 runtime recovery, the connector was restored to `Connected`, healthy, with three tools. A fresh WorkloadApp-originated smoke then selected `workload-escalation-parent`, delegated to `platform-escalation`, and completed the create/status/findings lifecycle with a structured final report and no resource modifications.
 
 ### V1 Release Gate

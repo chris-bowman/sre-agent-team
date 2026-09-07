@@ -32,6 +32,17 @@ Collect Container App console and system logs in the deployment's Log Analytics 
 
 Do not place bearer tokens, credentials, signed URLs, platform thread IDs, or unredacted findings in alerts. Use correlation ID, caller app ID, operation, status, and safe error category for diagnosis.
 
+Deploy the proxy outage rules independently from the application so monitoring changes do not create a Container App revision:
+
+```powershell
+.\scripts\deploy-escalation-monitoring.ps1 `
+	-ResourceGroup '<PLATFORM_RESOURCE_GROUP>' `
+	-SubscriptionId '<PLATFORM_SUBSCRIPTION_ID>' `
+	-AlertActionGroupResourceId '<EXISTING_ACTION_GROUP_RESOURCE_ID>'
+```
+
+The deployment creates separate five-minute alerts for policy/readiness failures and Platform SRE Agent dependency failures. `AlertActionGroupResourceId` is optional so detection can be deployed before notification routing is approved. An empty value creates visible Azure Monitor alert instances but sends no notifications; production release evidence requires an operator-owned action group with at least one enabled receiver and a successful test notification.
+
 ## Caller policy recovery
 
 Azure App Configuration retains key-value revision history. Caller writes use the loaded ETag, so concurrent updates fail instead of overwriting another operator's change. To roll back, select the previous revision value in App Configuration and write it as the current value with the active label. Confirm a `caller_policy_snapshot_updated` event and run `manage-escalation-callers.ps1 -Operation List`.

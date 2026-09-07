@@ -100,9 +100,14 @@ sequenceDiagram
 
 ---
 
-## ALZ Landing Zone Alignment
+## Sample ALZ Landing Zone Alignment
 
-Recommended production topology:
+The service does not require a particular management-group hierarchy, network topology,
+firewall product, or DNS architecture. The following is one supported production example
+for organizations using an ALZ hub-and-spoke model. Platform owners should adapt the
+[sample investigation playbook](./alz-hub-spoke-playbook.md) to their verified environment.
+
+Example production topology:
 
 ```
 Tenant Root

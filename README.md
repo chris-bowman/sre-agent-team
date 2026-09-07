@@ -27,7 +27,9 @@ Reference consumer: Workload SRE Agent → Platform Escalation Service
 See [docs/service-contract-v1.md](docs/service-contract-v1.md) for supported transports,
 schemas, and error behavior. See [docs/architecture.md](docs/architecture.md) for full diagrams
 and RBAC tables. Production DNS, egress, monitoring, and recovery guidance is in
-[docs/operations.md](docs/operations.md).
+[docs/operations.md](docs/operations.md). Platform owners using an ALZ hub-and-spoke network
+can adapt the optional [sample investigation playbook](docs/alz-hub-spoke-playbook.md); its
+topology assumptions are not service requirements and are not deployed automatically.
 
 Contributions are governed by [CONTRIBUTING.md](CONTRIBUTING.md),
 [SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

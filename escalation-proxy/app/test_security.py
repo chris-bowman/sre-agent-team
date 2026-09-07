@@ -104,7 +104,7 @@ def mock_token():
 
 @pytest.fixture
 def mock_token_workload_2():
-    """Mock a valid Bearer token for a different workload."""
+    """Mock a valid Bearer token for a different caller."""
     payload = {
         "appid": "00000000-0000-0000-0000-000000000002",
         "oid": "00000000-0000-0000-0000-000000000200",
@@ -137,7 +137,7 @@ def test_registry_create_and_retrieve_investigation(registry):
 
 
 def test_registry_denies_cross_workload_access(registry):
-    """Test that a different workload cannot access another's investigation."""
+    """Test that a different caller cannot access another's investigation."""
     inv_id = registry.create_investigation(
         caller_oid="oid1",
         caller_appid="appid1",
@@ -147,8 +147,8 @@ def test_registry_denies_cross_workload_access(registry):
         severity="high",
     )
 
-    # Try to access from a different workload (appid2)
-    with pytest.raises(ValueError, match="belongs to a different workload"):
+    # Try to access from a different caller (appid2)
+    with pytest.raises(ValueError, match="belongs to a different caller"):
         registry.get_investigation(inv_id, "oid1", "appid2")
 
 
@@ -1221,8 +1221,25 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
                             "create_platform_investigation",
                             {
                                 "description": "Investigate a service failure.",
-                                "workload_name": "reference-consumer",
+                                "caller_label": "generic-consumer",
                                 "idempotency_key": "mcp-create-123",
+                            },
+                        )
+                        legacy_create_result = await session.call_tool(
+                            "create_platform_investigation",
+                            {
+                                "description": "Investigate a legacy caller failure.",
+                                "workload_name": "reference-consumer",
+                                "idempotency_key": "mcp-create-legacy-123",
+                            },
+                        )
+                        conflicting_label_result = await session.call_tool(
+                            "create_platform_investigation",
+                            {
+                                "description": "Reject ambiguous caller metadata.",
+                                "caller_label": "generic-consumer",
+                                "workload_name": "different-consumer",
+                                "idempotency_key": "mcp-create-conflict-123",
                             },
                         )
                         status_result = await session.call_tool(
@@ -1236,11 +1253,16 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
                         unknown_result = await session.call_tool("unknown_tool", {})
 
     assert not create_result.isError
+    assert not legacy_create_result.isError
+    assert conflicting_label_result.isError
     assert not status_result.isError
     assert not summary_result.isError
     assert unknown_result.isError
-    assert create_impl.await_args.args[1] is caller
-    assert create_impl.await_args.args[2] == "mcp-create-123"
+    assert create_impl.await_args_list[0].args[0].workload_name == "generic-consumer"
+    assert create_impl.await_args_list[0].args[1] is caller
+    assert create_impl.await_args_list[0].args[2] == "mcp-create-123"
+    assert create_impl.await_args_list[1].args[0].workload_name == "reference-consumer"
+    assert create_impl.await_args_list[1].args[2] == "mcp-create-legacy-123"
     assert status_impl.await_args.args[1] is caller
     assert summary_impl.await_args.args[1] is caller
 

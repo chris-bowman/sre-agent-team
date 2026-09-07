@@ -10,6 +10,10 @@
 
 This document is the normative v1 contract for the Platform Escalation Service. Where older documentation or current implementation behavior differs, this contract defines the target behavior. Compatibility routes remain available during the migration window described below.
 
+## Public Terminology
+
+The service uses **caller** for an authenticated application identity and **consumer** for an integrating agent or service. **Workload SRE Agent** refers only to the optional reference implementation, while **workload** may still describe the Azure resources being investigated. The legacy `workload_name` field remains a deprecated v1 alias for `caller_label`; it is display metadata and does not identify or authorize a caller.
+
 ## Product Boundary
 
 The Platform Escalation Service lets an authorized external agent request an investigation from a privileged Platform SRE Agent. It deliberately exposes only an asynchronous investigation lifecycle:
@@ -105,7 +109,7 @@ Allowed values are:
 
 ```json
 {
-  "description": "The workload cannot resolve the shared API private endpoint.",
+  "description": "The caller cannot resolve the shared API private endpoint.",
   "caller_label": "payments-prod",
   "severity": "high",
   "context": "Failure began after the 16:00 UTC network deployment."

@@ -43,7 +43,7 @@ async def investigate() -> None:
                 "create_platform_investigation",
                 {
                     "description": "The caller cannot resolve the shared API private endpoint.",
-                    "workload_name": "example-consumer",
+                    "caller_label": "example-consumer",
                     "severity": "high",
                     "context": "The issue began after a network deployment.",
                 },
@@ -54,4 +54,4 @@ async def investigate() -> None:
 asyncio.run(investigate())
 ```
 
-The proxy validates the caller token and application identity on every MCP request. Callers must not depend on Platform SRE Agent thread IDs; the proxy returns opaque investigation IDs only.
+The proxy validates the caller token and application identity on every MCP request. Callers must not depend on Platform SRE Agent thread IDs; the proxy returns opaque investigation IDs only. Existing v1 integrations may continue to send `workload_name` as a deprecated alias for `caller_label`.

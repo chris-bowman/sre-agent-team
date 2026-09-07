@@ -212,9 +212,9 @@ seeding the initial caller policy. A timeout leaves the active Container App rev
 (pass them explicitly when the app team deploys from a different machine). The script
 uploads `workload/custom-agents/platform-escalation.yaml`.
 
-### 5. Platform team: Grant escalation access
+### 5. Platform team: Onboard a caller
 
-Run this **once per workload agent onboarded**. This compatibility wrapper grants the Entra role and registers enabled caller policies for the workload's user-assigned and distinct system-assigned identities:
+Every agent or service consumer needs the `EscalationCaller` Entra app role and an enabled caller policy. Use `manage-escalation-callers.ps1` for generic consumers. For the reference Workload SRE Agent, this compatibility wrapper registers both its user-assigned and distinct system-assigned identities:
 
 ```powershell
 .\scripts\grant-workload-escalation.ps1 -WorkloadName payments-api

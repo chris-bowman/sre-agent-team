@@ -3,7 +3,7 @@ escalation-proxy/app/main.py
 
 Platform Escalation HTTP Proxy
 ------------------------------
-HTTP proxy that allows workload SRE agents to escalate platform-layer investigations
+HTTP proxy that allows authorized callers to escalate platform-layer investigations
 to the central Platform SRE Agent.
 
 It exposes exactly 3 HTTP endpoints:
@@ -150,7 +150,7 @@ class InvestigationRecord:
     caller_oid: str  # Azure AD object ID of the creating caller
     caller_appid: str  # Application ID
     workload_name: str  # Sanitized workload name from request
-    workload_identity_appid: str  # App ID of the workload agent's service principal
+    workload_identity_appid: str  # Legacy name for the caller service principal's app ID
     platform_thread_id: str  # Platform SRE Agent thread ID
     severity: str
     created_at: float  # Unix timestamp
@@ -195,7 +195,7 @@ class InvestigationRegistry:
                 and record.reservation_state in {"reserved", "active"}
             )
             if active_count >= maximum_investigations:
-                raise ValueError(f"Workload has reached maximum concurrent investigations ({maximum_investigations})")
+                raise ValueError(f"Caller has reached maximum concurrent investigations ({maximum_investigations})")
 
             investigation_id = str(uuid.uuid4())
             record = InvestigationRecord(
@@ -274,7 +274,7 @@ class InvestigationRegistry:
         if not record:
             raise ValueError(f"Investigation {investigation_id} not found")
 
-        # Verify ownership: caller must be the workload agent that created the investigation.
+        # Verify ownership against the caller that created the investigation.
         if record.workload_identity_appid != workload_identity_appid:
             log_event(
                 "investigation_access_denied",
@@ -283,7 +283,7 @@ class InvestigationRegistry:
                 expected_appid=record.workload_identity_appid,
                 provided_appid=workload_identity_appid,
             )
-            raise ValueError("Unauthorized: investigation belongs to a different workload")
+            raise ValueError("Unauthorized: investigation belongs to a different caller")
 
         # Check expiry.
         if time.time() > record.expires_at:
@@ -328,7 +328,7 @@ class InvestigationRegistry:
         record.status_poll_count += 1
 
     def check_workload_quota(self, workload_identity_appid: str, maximum_investigations: int | None = None) -> None:
-        """Check if a workload has reached its investigation quota. Raises ValueError if exceeded."""
+        """Check if a caller has reached its investigation quota. Raises ValueError if exceeded."""
         quota = maximum_investigations or MAX_INVESTIGATIONS_PER_WORKLOAD
         active_count = sum(
             1
@@ -338,7 +338,7 @@ class InvestigationRegistry:
             and rec.reservation_state in {"reserved", "active"}
         )
         if active_count >= quota:
-            raise ValueError(f"Workload has reached maximum concurrent investigations ({quota})")
+            raise ValueError(f"Caller has reached maximum concurrent investigations ({quota})")
 
     def cleanup_expired(self, limit: int = MAX_EXPIRY_CLEANUP_BATCH_SIZE) -> int:
         """Remove up to limit expired investigations. Returns the count removed."""
@@ -525,7 +525,7 @@ class TableStorageInvestigationRegistry:
                     )
                     time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                     continue
-                raise ValueError(f"Workload has reached maximum concurrent investigations ({maximum_investigations})")
+                raise ValueError(f"Caller has reached maximum concurrent investigations ({maximum_investigations})")
             updated_counter = dict(counter)
             updated_counter["active_count"] = active_count + 1
             try:
@@ -689,7 +689,7 @@ class TableStorageInvestigationRegistry:
                 reason="caller_workload_identity_mismatch",
                 provided_appid=workload_identity_appid,
             )
-            raise ValueError("Unauthorized: investigation belongs to a different workload")
+            raise ValueError("Unauthorized: investigation belongs to a different caller")
         if time.time() > record.expires_at:
             self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
             raise ValueError(f"Investigation {investigation_id} has expired")
@@ -707,7 +707,7 @@ class TableStorageInvestigationRegistry:
                         reason="caller_workload_identity_mismatch",
                         provided_appid=workload_identity_appid,
                     )
-                    raise ValueError("Unauthorized: investigation belongs to a different workload")
+                    raise ValueError("Unauthorized: investigation belongs to a different caller")
                 if time.time() > record.expires_at:
                     self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
                     raise ValueError(f"Investigation {investigation_id} has expired")
@@ -746,7 +746,7 @@ class TableStorageInvestigationRegistry:
             and entity.get("reservation_state", "active") in {"reserved", "active"}
         )
         if active_count >= quota:
-            raise ValueError(f"Workload has reached maximum concurrent investigations ({quota})")
+            raise ValueError(f"Caller has reached maximum concurrent investigations ({quota})")
 
     def cleanup_expired(self, limit: int = MAX_EXPIRY_CLEANUP_BATCH_SIZE) -> int:
         now = time.time()
@@ -906,7 +906,7 @@ _jwks_client = jwt.PyJWKClient(JWKS_URI, cache_keys=True)
 
 def validate_caller_token(bearer_token: str) -> dict:
     """
-    Validate the workload agent's Entra token.
+    Validate the caller's Entra token.
     Raises ValueError if invalid or missing EscalationCaller role.
     """
     try:
@@ -940,7 +940,7 @@ def validate_caller_token(bearer_token: str) -> dict:
         )
         raise ValueError("Caller does not have the EscalationCaller app role")
 
-    # Validate required identity claims (workload agent's service principal).
+    # Validate required identity claims for the caller service principal.
     if not payload.get("appid"):
         raise ValueError("Token missing appid claim")
     if not payload.get("oid"):
@@ -1752,11 +1752,11 @@ async def create_investigation(
     authorization: str = Header(None),
 ):
     """
-    Create a platform investigation from a workload escalation.
+    Create a platform investigation through the legacy compatibility route.
 
     Args:
         description:   Clear description of the problem.
-        workload_name: Name of the workload/team making the escalation.
+        workload_name: Deprecated display label for the caller; retained for v1 compatibility.
         severity:      'low' | 'medium' | 'high' | 'critical'
         context:       Additional diagnostic context.
 

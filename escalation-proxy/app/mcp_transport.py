@@ -88,18 +88,25 @@ def create_mcp_app():
     @server.tool()
     async def create_platform_investigation(
         description: str,
-        workload_name: str,
+        caller_label: str = "",
         severity: str = "medium",
         context: str = "",
         idempotency_key: str = "",
+        workload_name: str = "",
     ) -> dict[str, Any]:
         """Create an investigation through the Platform Escalation Service."""
         from main import CreateInvestigationRequest, _create_investigation_impl
 
+        if caller_label and workload_name and caller_label != workload_name:
+            raise ValueError("caller_label and workload_name must match when both are supplied")
+        resolved_caller_label = caller_label or workload_name
+        if not resolved_caller_label:
+            raise ValueError("caller_label is required")
+
         return await _create_investigation_impl(
             CreateInvestigationRequest(
                 description=description,
-                workload_name=workload_name,
+                workload_name=resolved_caller_label,
                 severity=severity,
                 context=context,
             ),

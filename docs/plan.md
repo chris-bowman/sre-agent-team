@@ -345,7 +345,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P7.1 Rewrite the root README around the Platform SRE Agent and Escalation Service.
 - [x] P7.2 Update architecture documentation to distinguish privileged admin access from the narrow external-agent path.
 - [x] P7.3 Move the workload flow under a clearly labeled reference implementation section.
-- [ ] P7.4 Generalize public terminology from workload to caller or consumer while preserving `workload_name` compatibility in v1.
+- [x] P7.4 Generalize public terminology from workload to caller or consumer while preserving `workload_name` compatibility in v1. Public errors and integration guidance now use caller-first language; MCP exposes `caller_label` while accepting matching or standalone legacy `workload_name`, and the Workload SRE Agent remains explicitly named only as the reference implementation.
 - [ ] P7.5 Split fixed ALZ assumptions into a sample playbook or explicit platform-owned configuration.
 - [x] P7.6 Add one generic MCP client example using same-tenant application identity.
 - [x] P7.7 Add one generic HTTP client example using same-tenant application identity.

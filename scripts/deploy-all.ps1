@@ -5,7 +5,7 @@
 # the shared deploy-state file (scripts/.deploy-state.json):
 #
 #   1. platform  -> deploy-platform.ps1            (Platform SRE Agent + RBAC + custom agent)
-#   2. proxy     -> deploy-escalation-proxy.ps1    (Entra app + Container App proxy)
+#   2. proxy     -> deploy-escalation-proxy.ps1    (Container App proxy)
 #   3. workload  -> deploy-workload.ps1            (Workload SRE Agent + MCP connector + custom agent)
 #   4. grant     -> grant-workload-escalation.ps1  (EscalationCaller app-role for the workload MI)
 #
@@ -35,6 +35,8 @@ param (
     # ── Proxy phase ──
     [Parameter(Mandatory)] [string] $AcrName,
     [string] $ProxyAppName = 'sre-escalation-proxy',
+    [string] $ProxyEntraAppId = '',
+    [switch] $BootstrapEntraApplication,
     [ValidateSet('table', 'memory')] [string] $RegistryBackend = 'table',
     [ValidateRange(1, 100)] [int] $ProxyMinReplicas = 1,
     [ValidateRange(1, 100)] [int] $ProxyMaxReplicas = 5,
@@ -117,12 +119,13 @@ if ($Phases -contains 'platform') {
 
 # ── Phase 2: Escalation proxy ─────────────────────────────────────────────────
 if ($Phases -contains 'proxy') {
-    & $banner 'PHASE 2/4 — Escalation Proxy (Container App + Entra app)'
+    & $banner 'PHASE 2/4 — Escalation Proxy Container App'
     $proxyArgs = @{
         ResourceGroup   = $PlatformResourceGroup
         SubscriptionId  = $PlatformSubscriptionId
         AcrName         = $AcrName
         ProxyAppName    = $ProxyAppName
+        ProxyEntraAppId = $ProxyEntraAppId
         Location        = $Location
         RegistryBackend = $RegistryBackend
         MinReplicas     = $ProxyMinReplicas
@@ -140,6 +143,7 @@ if ($Phases -contains 'proxy') {
         # PlatformAgentId / PlatformAgentEndpoint are read from deploy state.
     }
     if ($EnablePrivateNetworking) { $proxyArgs.EnablePrivateNetworking = $true }
+    if ($BootstrapEntraApplication) { $proxyArgs.BootstrapEntraApplication = $true }
     $null = & "$PSScriptRoot\deploy-escalation-proxy.ps1" @proxyArgs
 }
 

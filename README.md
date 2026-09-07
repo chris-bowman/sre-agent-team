@@ -45,7 +45,7 @@ The project is licensed under the [MIT License](LICENSE), and notable changes ar
 | PowerShell | 7+ (`pwsh`). The scripts auto-install the `powershell-yaml` module if missing. |
 | Docker / ACR | For building and pushing the escalation proxy container image |
 | Python 3.12 | For local testing of the proxy |
-| Permissions (platform team) | Contributor on the platform RG, Application Administrator in Entra, and rights to assign RBAC on the chosen platform scope (subscription or management group) |
+| Permissions (platform team) | Contributor on the platform RG and rights to assign RBAC on the chosen platform scope (subscription or management group). Application Administrator is required only for Entra bootstrap and caller app-role administration. |
 | Permissions (app team) | Contributor + User Access Administrator on their workload scope |
 
 ## Access governance note
@@ -95,11 +95,14 @@ So the custom agents (`workload-liaison`, `platform-escalation`) **must** be app
 
 ---
 
-## Deploy everything with one command
+## Deploy everything after identity bootstrap
 
 `scripts/deploy-all.ps1` runs all four phases in order and passes outputs between
 them automatically via a local `scripts/.deploy-state.json` file — no copy/pasting
-resource IDs. Components are still fully separable (see [next section](#deploy-components-separately)).
+resource IDs. First run `scripts/initialize-escalation-proxy-entra.ps1` once with an
+identity administrator, pass its existing client ID with `-ProxyEntraAppId`, or explicitly
+allow first-run bootstrap with `-BootstrapEntraApplication`.
+Components are still fully separable (see [next section](#deploy-components-separately)).
 
 ```powershell
 # Single-subscription lab
@@ -127,8 +130,12 @@ Re-run a subset (resume) with `-Phases`:
 
 ```powershell
 .\scripts\deploy-all.ps1 ... -Phases workload,grant      # only the workload phases
-.\scripts\deploy-all.ps1 ... -Phases proxy -ResetState   # start a clean state file
+.\scripts\deploy-all.ps1 ... -Phases proxy `
+  -ProxyEntraAppId <existing-client-id>                 # reuse platform outputs from state
 ```
+
+When using `-ResetState`, include the `platform` phase so its outputs are recreated and
+pass `-ProxyEntraAppId`, or rerun the identity bootstrap after clearing state.
 
 Add `-SkipCustomAgentUpload` to deploy infrastructure only and add the subagents
 by hand later (see [Adding custom agents manually](#adding-custom-agents-manually)).
@@ -158,7 +165,19 @@ For a single-subscription test deployment, omit `-PlatformManagementGroupId`. Ou
 deploy state and uploaded to the agent. The script also uploads
 `platform/custom-agents/workload-liaison.yaml`. Use `-SkipCustomAgentUpload` to skip that.
 
-### 2. Platform team: Deploy Escalation Proxy
+### 2. Platform identity administrator: Bootstrap Escalation Proxy identity
+
+```powershell
+.\scripts\initialize-escalation-proxy-entra.ps1 `
+  -ProxyAppName sre-escalation-proxy
+```
+
+This one-time, idempotent step creates or reuses the proxy application, configures its
+`api://<client-id>` identifier URI and `EscalationCaller` app role, ensures the service
+principal exists, and saves the client ID to deploy state. It requires Microsoft Entra
+application administration rights. Rerun it only when creating or repairing the identity.
+
+### 3. Platform team: Deploy Escalation Proxy
 
 ```powershell
 .\scripts\deploy-escalation-proxy.ps1 `
@@ -169,13 +188,16 @@ deploy state and uploaded to the agent. The script also uploads
 
 `PlatformAgentId` / `PlatformAgentEndpoint` are read from deploy state (pass them
 explicitly with `-PlatformAgentId` / `-PlatformAgentEndpoint` if running standalone).
+`ProxyEntraAppId` is also read from deploy state; pass an existing client ID explicitly
+when deploy state is unavailable. Routine deployment does not read or modify Entra
+application registrations.
 The script resolves the **SRE Agent Administrator** role GUID automatically and passes it
 to Bicep. Outputs `PROXY_ENDPOINT_URL` and `PROXY_ENTRA_CLIENT_ID` are saved to state.
 For an existing app, the script requires the latest ready revision to be active before it
 builds a replacement. It also waits for App Configuration data-plane RBAC propagation before
 seeding the initial caller policy. A timeout leaves the active Container App revision unchanged.
 
-### 3. App team: Deploy Workload SRE Agent
+### 4. App team: Deploy Workload SRE Agent
 
 ```powershell
 .\scripts\deploy-workload.ps1 `
@@ -190,7 +212,7 @@ seeding the initial caller policy. A timeout leaves the active Container App rev
 (pass them explicitly when the app team deploys from a different machine). The script
 uploads `workload/custom-agents/platform-escalation.yaml`.
 
-### 4. Platform team: Grant escalation access
+### 5. Platform team: Grant escalation access
 
 Run this **once per workload agent onboarded**. This compatibility wrapper grants the Entra role and registers enabled caller policies for the workload's user-assigned and distinct system-assigned identities:
 
@@ -284,6 +306,8 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `PlatformAgentName` | No | `sre-platform` | Name of the platform SRE agent resource. |
 | `AcrName` | Yes | n/a | Azure Container Registry name used to build/push the proxy image. |
 | `ProxyAppName` | No | `sre-escalation-proxy` | Escalation proxy app/container name prefix. |
+| `ProxyEntraAppId` | No | `''` (resolved from state) | Existing proxy Entra application client ID passed to routine proxy deployment. Required after `ResetState` unless bootstrap is rerun. |
+| `BootstrapEntraApplication` | No (switch) | Off | If no client ID is supplied or stored, runs the privileged Entra bootstrap before proxy deployment. Requires application administration rights. |
 | `RegistryBackend` | No | `table` | Investigation registry backend: production Azure Table Storage or local/test memory. |
 | `ProxyMinReplicas` | No | `1` | Minimum proxy Container App replicas. Use at least `2` for production. |
 | `ProxyMaxReplicas` | No | `5` | Maximum proxy Container App replicas; must be at least `ProxyMinReplicas`. |
@@ -317,6 +341,13 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `SkipCustomAgentUpload` | No (switch) | Off | Skips upload of `platform/custom-agents/workload-liaison.yaml`. |
 | `SkipCurrentCallerAgentAdminAssignment` | No (switch) | Off | Skips assigning SRE Agent Administrator to the current caller on the deployed platform agent. |
 
+### scripts/initialize-escalation-proxy-entra.ps1
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `ProxyAppName` | No | `sre-escalation-proxy` | Proxy name used to derive the Entra application display name. |
+| `ProxyEntraAppId` | No | Unique display-name match or new app | Existing client ID to configure. When omitted, the script reuses one unique display-name match or creates an application. |
+
 ### scripts/deploy-escalation-proxy.ps1
 
 | Parameter | Required | Default | Description |
@@ -330,7 +361,8 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `Location` | No | `australiaeast` | Deployment region for proxy infrastructure. |
 | `ImageTag` | No | UTC timestamp (`yyyyMMddHHmmss`) | Traceability tag used for the ACR build. Deployment resolves and uses the resulting immutable image digest; `latest` is rejected. |
 | `PipIndexUrl` | No | Microsoft corporate package proxy | HTTPS Python package feed passed to the container build. Do not include credentials in committed commands or files. |
-| `ProxyEntraAppId` | No | Existing matching app or new app | Stable proxy Entra application client ID. Pass explicitly when display-name lookup is unavailable or ambiguous. |
+| `ProxyEntraAppId` | No | `''` (resolved from state) | Existing stable proxy Entra application client ID. Run `initialize-escalation-proxy-entra.ps1` first or pass the ID explicitly. |
+| `BootstrapEntraApplication` | No (switch) | Off | If no client ID is supplied or stored, invokes `initialize-escalation-proxy-entra.ps1`. This opt-in path requires Microsoft Graph access and application administration rights. |
 | `CallerPoliciesJson` | No | Existing deployed value, then `[]` | Initial migration value used only when the App Configuration policy key is absent. Routine deployments preserve the existing App Configuration value. |
 | `AppConfigurationName` | No | Derived from proxy name and subscription | App Configuration store containing the dynamic caller policy. |
 | `CallerPolicyKey` | No | `escalation/caller-policies` | App Configuration key containing the caller policy JSON array. |

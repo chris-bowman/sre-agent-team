@@ -439,10 +439,11 @@ The deployment workflow creates the following primary artifacts:
 The repository includes sequential deployment scripts:
 
 1. `scripts/deploy-platform.ps1`
-2. `scripts/deploy-escalation-proxy.ps1`
-3. `scripts/deploy-workload.ps1`
-4. `scripts/grant-workload-escalation.ps1`
-5. `scripts/deploy-all.ps1`
+2. `scripts/initialize-escalation-proxy-entra.ps1` (one-time privileged bootstrap)
+3. `scripts/deploy-escalation-proxy.ps1`
+4. `scripts/deploy-workload.ps1`
+5. `scripts/grant-workload-escalation.ps1`
+6. `scripts/deploy-all.ps1`
 
 These scripts coordinate through a deployment state file saved under `scripts/.deploy-state.json` so outputs can flow between phases without repetitive manual copying.
 
@@ -524,6 +525,7 @@ The workload deployment:
 The proxy deployment:
 
 - builds or references the proxy application image
+- consumes an existing proxy Entra application client ID without Microsoft Graph access
 - configures the container app with the required identity and environment settings
 - assigns the required role to the proxy’s managed identity on the platform agent
 - sets up application insights and operational logging

@@ -1,11 +1,11 @@
 # scripts/deploy-escalation-proxy.ps1
 # Deploys the Platform Escalation MCP Proxy as an Azure Container App.
-# Run this AFTER deploy-platform.ps1. Platform team runs this ONCE.
+# Run this AFTER deploy-platform.ps1 and initialize-escalation-proxy-entra.ps1.
 #
 # Prerequisites:
 #   - az CLI with Docker or ACR build available
 #   - Contributor on the platform resource group
-#   - Application Administrator (Entra) to create app registration and app roles
+#   - Existing proxy Entra application client ID from bootstrap or explicit input
 #   - Values from deploy-platform.ps1 output
 
 [CmdletBinding()]
@@ -21,6 +21,7 @@ param (
     [string] $ImageTag = '',
     [string] $PipIndexUrl = 'https://packagefeedproxy.microsoft.io/pypi/simple/',
     [string] $ProxyEntraAppId = '',
+    [switch] $BootstrapEntraApplication,
     [string] $CallerPoliciesJson = '',
     [string] $AppConfigurationName = '',
     [string] $CallerPolicyKey = 'escalation/caller-policies',
@@ -50,8 +51,21 @@ $ErrorActionPreference = 'Stop'
 # Resolve platform agent details from deploy state when not passed explicitly.
 $PlatformAgentId       = Resolve-Value -Provided $PlatformAgentId       -StateKey 'PlatformAgentId'
 $PlatformAgentEndpoint = Resolve-Value -Provided $PlatformAgentEndpoint -StateKey 'PlatformAgentEndpoint'
+$ProxyEntraAppId       = Resolve-Value -Provided $ProxyEntraAppId       -StateKey 'ProxyEntraClientId'
 if ([string]::IsNullOrWhiteSpace($PlatformAgentId) -or [string]::IsNullOrWhiteSpace($PlatformAgentEndpoint)) {
     throw 'PlatformAgentId and PlatformAgentEndpoint are required. Pass them explicitly or run deploy-platform.ps1 first so they are stored in deploy state.'
+}
+if ([string]::IsNullOrWhiteSpace($ProxyEntraAppId) -and $BootstrapEntraApplication) {
+    Write-Host 'No proxy Entra client ID was found; running the privileged bootstrap.' -ForegroundColor Yellow
+    $bootstrapResult = & "$PSScriptRoot\initialize-escalation-proxy-entra.ps1" -ProxyAppName $ProxyAppName
+    $ProxyEntraAppId = [string]$bootstrapResult.ProxyEntraClientId
+}
+if ([string]::IsNullOrWhiteSpace($ProxyEntraAppId)) {
+    throw 'ProxyEntraAppId is required. Pass an existing client ID, run initialize-escalation-proxy-entra.ps1 first, or explicitly opt in with -BootstrapEntraApplication.'
+}
+$parsedProxyEntraAppId = [guid]::Empty
+if (-not [guid]::TryParse($ProxyEntraAppId, [ref]$parsedProxyEntraAppId)) {
+    throw "ProxyEntraAppId '$ProxyEntraAppId' is not a valid application client ID."
 }
 
 if ([string]::IsNullOrWhiteSpace($ImageTag)) {
@@ -141,77 +155,9 @@ if ($LASTEXITCODE -ne 0 -or $imageDigest -notmatch '^sha256:[0-9a-f]{64}$') {
 $containerImage = "$acrLoginServer/${ProxyAppName}@$imageDigest"
 Write-Host "Immutable image reference: $containerImage"
 
-Write-Host "`n=== Step 2: Resolve Entra app registration for the proxy ===" -ForegroundColor Cyan
+Write-Host "`n=== Step 2: Use bootstrapped Entra application ===" -ForegroundColor Cyan
 $tenantId = az account show --query tenantId -o tsv
-
-$appDisplayName = "SRE Escalation Proxy ($ProxyAppName)"
-$entraAppId = $ProxyEntraAppId
-$entraObjectId = ''
-
-if ([string]::IsNullOrWhiteSpace($entraAppId)) {
-    $matchingApps = @(az ad app list --display-name $appDisplayName --query '[].{appId:appId,id:id}' -o json | ConvertFrom-Json)
-    if ($matchingApps.Count -gt 1) {
-        throw "Multiple Entra applications found with display name '$appDisplayName'. Pass -ProxyEntraAppId explicitly to select the stable registration."
-    }
-    if ($matchingApps.Count -eq 1) {
-        $entraAppId = $matchingApps[0].appId
-        $entraObjectId = $matchingApps[0].id
-        Write-Host "Reusing existing Entra app: $entraAppId (object: $entraObjectId)"
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($entraAppId)) {
-    $appJson = az ad app create `
-        --display-name $appDisplayName `
-        --sign-in-audience 'AzureADMyOrg' `
-        --output json | ConvertFrom-Json
-    $entraAppId = $appJson.appId
-    $entraObjectId = $appJson.id
-    Write-Host "Entra app created: $entraAppId (object: $entraObjectId)"
-} elseif ([string]::IsNullOrWhiteSpace($entraObjectId)) {
-    $entraObjectId = az ad app show --id $entraAppId --query id -o tsv
-    if ([string]::IsNullOrWhiteSpace($entraObjectId)) {
-        throw "The supplied ProxyEntraAppId '$entraAppId' could not be resolved."
-    }
-    Write-Host "Using supplied Entra app: $entraAppId (object: $entraObjectId)"
-}
-
-Write-Host "`n=== Step 2a: Set Application ID URI for scope-based MI tokens ===" -ForegroundColor Cyan
-az ad app update --id $entraObjectId --identifier-uris "api://$entraAppId" | Out-Null
-Write-Host "Application ID URI set: api://$entraAppId"
-
-Write-Host "`n=== Step 3: Add EscalationCaller app role to the registration ===" -ForegroundColor Cyan
-$existingAppRoleId = az ad app show --id $entraAppId --query "appRoles[?value=='EscalationCaller'].id | [0]" -o tsv
-if ([string]::IsNullOrWhiteSpace($existingAppRoleId)) {
-    $appRoleManifest = @(
-        @{
-            allowedMemberTypes = @('Application')
-            description        = 'Allows a workload SRE agent to escalate investigations to the platform agent'
-            displayName        = 'EscalationCaller'
-            id                 = [guid]::NewGuid().ToString()
-            isEnabled          = $true
-            value              = 'EscalationCaller'
-        }
-    ) | ConvertTo-Json -Compress
-
-    # Write to a temp file (az CLI requires a file for app role manifest)
-    $tmpFile = [System.IO.Path]::GetTempFileName() + '.json'
-    $appRoleManifest | Out-File -FilePath $tmpFile -Encoding utf8
-    az ad app update --id $entraObjectId --app-roles "@$tmpFile"
-    Remove-Item $tmpFile
-    Write-Host "EscalationCaller app role added"
-} else {
-    Write-Host "EscalationCaller app role already present"
-}
-
-Write-Host "`n=== Step 4: Create service principal for the app registration ===" -ForegroundColor Cyan
-$spObjectId = az ad sp show --id $entraAppId --query id -o tsv 2>$null
-if ([string]::IsNullOrWhiteSpace($spObjectId)) {
-    az ad sp create --id $entraObjectId | Out-Null
-    Write-Host "Service principal created"
-} else {
-    Write-Host "Service principal already exists"
-}
+Write-Host "Using proxy Entra application client ID: $ProxyEntraAppId"
 
 Write-Host "`n=== Step 5: Set active subscription ===" -ForegroundColor Cyan
 az account set --subscription $SubscriptionId
@@ -329,10 +275,21 @@ az resource update `
     --output none
 if ($LASTEXITCODE -ne 0) { throw 'Failed to enforce App Configuration authentication settings.' }
 
-$signedInPrincipalId = az ad signed-in-user show --query id --output tsv
-if ([string]::IsNullOrWhiteSpace($signedInPrincipalId)) {
-    throw 'Could not resolve the signed-in user for App Configuration policy administration.'
+$armAccessToken = az account get-access-token `
+    --resource https://management.azure.com/ `
+    --query accessToken `
+    --output tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($armAccessToken)) {
+    throw 'Could not obtain an Azure Resource Manager token for App Configuration policy administration.'
 }
+$tokenPayload = $armAccessToken.Split('.')[1].Replace('-', '+').Replace('_', '/')
+while ($tokenPayload.Length % 4 -ne 0) { $tokenPayload += '=' }
+$tokenClaims = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($tokenPayload)) | ConvertFrom-Json
+$signedInPrincipalId = [string]$tokenClaims.oid
+if ([string]::IsNullOrWhiteSpace($signedInPrincipalId)) {
+    throw 'The Azure Resource Manager token does not contain an oid claim for App Configuration policy administration.'
+}
+$signedInPrincipalType = if ($tokenClaims.idtyp -eq 'app') { 'ServicePrincipal' } else { 'User' }
 $dataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
 $dataOwnerAssignmentsJson = az role assignment list `
     --assignee-object-id $signedInPrincipalId `
@@ -344,7 +301,7 @@ $dataOwnerAssignmentCount = @($dataOwnerAssignmentsJson | ConvertFrom-Json).Coun
 if ($dataOwnerAssignmentCount -eq 0) {
     az role assignment create `
         --assignee-object-id $signedInPrincipalId `
-        --assignee-principal-type User `
+        --assignee-principal-type $signedInPrincipalType `
         --role $dataOwnerRoleId `
         --scope $appConfigurationId `
         --output none
@@ -395,7 +352,7 @@ $deployOutputJson = az deployment group create `
         platformAgentResourceId=$PlatformAgentId `
         platformAgentEndpoint=$PlatformAgentEndpoint `
         tenantId=$tenantId `
-        entraAppClientId=$entraAppId `
+        entraAppClientId=$ProxyEntraAppId `
         callerPoliciesJson=$callerPoliciesParameterValue `
         appConfigurationName=$AppConfigurationName `
         callerPolicyKey=$CallerPolicyKey `
@@ -460,7 +417,7 @@ Write-Host "`n=== Deployment complete ===" -ForegroundColor Green
 
 # Persist outputs so deploy-workload.ps1 / grant-workload-escalation.ps1 / deploy-all.ps1 can read them.
 Set-DeployState -Key 'ProxyEndpointUrl'    -Value $proxyEndpointUrl
-Set-DeployState -Key 'ProxyEntraClientId'  -Value $entraAppId
+Set-DeployState -Key 'ProxyEntraClientId'  -Value $ProxyEntraAppId
 Set-DeployState -Key 'ProxyPrincipalId'    -Value $proxyPrincipalId
 Set-DeployState -Key 'ProxySubscriptionId' -Value $SubscriptionId
 Set-DeployState -Key 'ProxyResourceGroup'  -Value $ResourceGroup
@@ -472,7 +429,7 @@ Set-DeployState -Key 'AppConfigurationEndpoint' -Value $appConfigurationEndpoint
 
 Write-Host "Save these values for workload agent deployments (also stored in deploy state):"
 Write-Host "  PROXY_ENDPOINT_URL:     $proxyEndpointUrl"
-Write-Host "  PROXY_ENTRA_CLIENT_ID:  $entraAppId"
+Write-Host "  PROXY_ENTRA_CLIENT_ID:  $ProxyEntraAppId"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  - Deploy workload agents: scripts/deploy-workload.ps1"
@@ -480,7 +437,7 @@ Write-Host "  - For each workload agent, run: scripts/grant-workload-escalation.
 
 return [ordered]@{
     ProxyEndpointUrl   = $proxyEndpointUrl
-    ProxyEntraClientId = $entraAppId
+    ProxyEntraClientId = $ProxyEntraAppId
     ProxyPrincipalId   = $proxyPrincipalId
     ProxyImageDigest   = $imageDigest
     ProxyImageReference = $containerImage

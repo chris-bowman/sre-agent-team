@@ -179,10 +179,17 @@ validation because its Entra assignment has been removed.
 
 ### Deployment and policy safety
 
+Run `initialize-escalation-proxy-entra.ps1` once with Microsoft Entra application
+administration rights. It creates or reuses the proxy application, configures its
+identifier URI and `EscalationCaller` role, ensures the service principal exists, and
+stores the stable client ID in deploy state.
+
 Routine `deploy-escalation-proxy.ps1` runs read the currently deployed
-`CALLER_POLICIES_JSON` immediately before the Bicep deployment and preserve it. The proxy
-Entra application is also stable across deployments; pass its client ID with
-`-ProxyEntraAppId` when it cannot be resolved by display name.
+`CALLER_POLICIES_JSON` immediately before the Bicep deployment and preserve it. They read
+the proxy Entra client ID from deploy state or `-ProxyEntraAppId` and never read or write
+the application registration through Microsoft Graph by default. For a first deployment,
+`-BootstrapEntraApplication` explicitly opts into running the privileged bootstrap when no
+client ID is available.
 
 Do not write raw JSON with `az containerapp update --set-env-vars` from PowerShell on
 Windows. Native argument handling can strip the JSON property-name quotes, causing the

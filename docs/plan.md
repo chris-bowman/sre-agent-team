@@ -228,13 +228,13 @@ Do not start production networking or repository-wide terminology changes before
 
 **Goal:** Preserve the service identity and operate safely in policy-restricted Azure environments.
 
-- [ ] P5.1 Split Entra application bootstrap from routine proxy deployment.
+- [x] P5.1 Split Entra application bootstrap from routine proxy deployment. The idempotent `initialize-escalation-proxy-entra.ps1` owns application, identifier URI, app-role, and service-principal setup; routine deployment consumes a validated existing client ID without Microsoft Graph access unless the operator explicitly supplies `-BootstrapEntraApplication` for first-run setup.
 - [x] P5.2 Make deployment reuse a stable proxy application client ID when supplied or uniquely discoverable.
 - [x] P5.3 Add idempotent grant, list, verify, disable, and revoke operations for same-tenant callers. The operator command synchronizes Entra app-role assignments with caller policy, bootstraps existing grants before enabling allowlist mode, supports `-WhatIf`, and preserves policy across redeployment.
-- [ ] P5.4 Retain workload-oriented parameter aliases during the compatibility window.
+- [x] P5.4 Retain workload-oriented parameter aliases during the compatibility window. `manage-escalation-callers.ps1` preserves `WorkloadPrincipalId` and `WorkloadName` aliases for the caller-oriented parameters.
 - [x] **P5.5 Add a production profile with VNet-integrated Container Apps, Storage private endpoint, and private DNS. (2026-08-31)**
 - [x] **P5.6 Disable Storage public network access in production mode. (2026-08-31 — enforced by tenant policy)**
-- [ ] P5.7 Document required Entra and Platform SRE Agent egress/DNS paths.
+- [x] P5.7 Document required Entra and Platform SRE Agent egress/DNS paths. `docs/operations.md` records the required HTTPS destinations, private Table DNS, and production egress expectations.
 - [x] P5.8 Parameterize limits, retention, replicas, log retention, ingress profile, probes, finalization policy, and tags. ✅ Replica bounds and Log Analytics retention are parameterized
 - [x] P5.9 Create registry storage and RBAC only when the selected backend requires them.
 - [x] P5.10 Deploy immutable image tags or digests and pin runtime dependencies.
@@ -246,6 +246,7 @@ Do not start production networking or repository-wide terminology changes before
 
 - ✅ Production Bicep infrastructure: VNet, subnets, NAT Gateway, private endpoint, private DNS zone, Container App environment, Storage account, RBAC assignment
 - ✅ Deployment reuse: Script preserves Entra app ID when supplied via `-ProxyEntraAppId`; multiple deployments use same client ID
+- ✅ Privilege separation: Entra application bootstrap is a separate idempotent command; routine proxy deployment uses deploy state or an explicit client ID and contains no Graph operations.
 - ✅ Policy-compliant networking: tenant policy forces `publicNetworkAccess=Disabled` on storage; private endpoint + VNet integration bypasses this
 - ✅ Runtime dependencies split: production image uses `requirements.txt`; test dependencies in `requirements-dev.txt`
 - ✅ Parameterized Container App: minReplicas, maxReplicas, logRetentionDays configurable; revisionSuffix forced for immutable redeploy

@@ -13,6 +13,9 @@ param (
     [string] $SubscriptionId = '',
     [string] $ResourceGroup = '',
     [string] $ProxyAppName = '',
+    [string] $AppConfigurationEndpoint = '',
+    [string] $CallerPolicyKey = 'escalation/caller-policies',
+    [string] $CallerPolicyLabel = 'production',
     [ValidateSet('low', 'medium', 'high', 'critical')]
     [string] $MaximumSeverity = 'critical',
     [ValidateRange(1, 100)]
@@ -142,6 +145,16 @@ function Get-CallerServicePrincipal {
 function Get-CallerPolicies {
     if ($SkipPolicyUpdate) { return @() }
 
+    if (-not [string]::IsNullOrWhiteSpace($AppConfigurationEndpoint)) {
+        $setting = Get-AppConfigurationSetting `
+            -Endpoint $AppConfigurationEndpoint `
+            -Key $CallerPolicyKey `
+            -Label $CallerPolicyLabel
+        $script:CallerPolicyEtag = $setting.etag
+        if ([string]::IsNullOrWhiteSpace($setting.value)) { return @() }
+        return @($setting.value | ConvertFrom-Json)
+    }
+
     $arguments = @(
         'containerapp', 'show', '--name', $ProxyAppName,
         '--resource-group', $ResourceGroup
@@ -167,6 +180,27 @@ function Set-CallerPolicies {
 
     if ($SkipPolicyUpdate) { return }
     $json = ConvertTo-Json -InputObject @($Policies) -Depth 10 -Compress
+
+    if (-not [string]::IsNullOrWhiteSpace($AppConfigurationEndpoint)) {
+        if ([string]::IsNullOrWhiteSpace($script:CallerPolicyEtag)) {
+            throw 'Caller policy ETag is unavailable; reload the policy before updating it.'
+        }
+        $actor = az account show --query user.name --output tsv
+        try {
+            $null = Set-AppConfigurationSetting `
+                -Endpoint $AppConfigurationEndpoint `
+                -Key $CallerPolicyKey `
+                -Label $CallerPolicyLabel `
+                -Value $json `
+                -Etag $script:CallerPolicyEtag `
+                -Tags @{ operation = $Operation; actor = $actor }
+        } catch {
+            throw "Caller policy changed concurrently or the App Configuration update failed. Reload and retry. $($_.Exception.Message)"
+        }
+        Write-Host 'Caller policy updated in Azure App Configuration; revision history retained by the service.' -ForegroundColor Green
+        return
+    }
+
     $escapedJson = $json.Replace('"', '\"')
     $arguments = @(
         'containerapp', 'update', '--name', $ProxyAppName,
@@ -222,14 +256,17 @@ $EntraAppId = Resolve-Value -Provided $EntraAppId -StateKey 'ProxyEntraClientId'
 $SubscriptionId = Resolve-Value -Provided $SubscriptionId -StateKey 'ProxySubscriptionId'
 $ResourceGroup = Resolve-Value -Provided $ResourceGroup -StateKey 'ProxyResourceGroup'
 $ProxyAppName = Resolve-Value -Provided $ProxyAppName -StateKey 'ProxyAppName'
+$AppConfigurationEndpoint = Resolve-Value -Provided $AppConfigurationEndpoint -StateKey 'AppConfigurationEndpoint'
 
 if ([string]::IsNullOrWhiteSpace($EntraAppId)) {
     throw 'EntraAppId is required. Pass it explicitly or deploy the escalation proxy first.'
 }
 if (-not $SkipPolicyUpdate -and (
-        [string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpace($ProxyAppName)
+        [string]::IsNullOrWhiteSpace($AppConfigurationEndpoint) -and (
+            [string]::IsNullOrWhiteSpace($ResourceGroup) -or [string]::IsNullOrWhiteSpace($ProxyAppName)
+        )
     )) {
-    throw 'ResourceGroup and ProxyAppName are required for caller policy administration.'
+    throw 'AppConfigurationEndpoint or the legacy ResourceGroup and ProxyAppName coordinates are required for caller policy administration.'
 }
 if ($Operation -eq 'Disable' -and $SkipPolicyUpdate) {
     throw 'Disable requires caller policy administration; remove -SkipPolicyUpdate and provide the proxy resource coordinates.'

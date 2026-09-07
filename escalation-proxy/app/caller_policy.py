@@ -1,7 +1,13 @@
 """Operator-owned authorization policy for same-tenant escalation callers."""
 
 import json
+import time
 from dataclasses import dataclass
+from threading import Lock
+from typing import Any, Callable
+
+from azure.appconfiguration import AzureAppConfigurationClient
+from azure.identity import DefaultAzureCredential
 
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -16,14 +22,25 @@ class CallerPolicy:
 
 
 class CallerPolicyStore:
-    def __init__(self, policies: dict[str, CallerPolicy], default_quota: int):
+    def __init__(
+        self,
+        policies: dict[str, CallerPolicy],
+        default_quota: int,
+        allow_unregistered: bool = True,
+    ):
         self._policies = policies
         self._default_quota = default_quota
+        self._allow_unregistered = allow_unregistered
 
     @classmethod
-    def from_json(cls, raw: str, default_quota: int) -> "CallerPolicyStore":
+    def from_json(
+        cls,
+        raw: str,
+        default_quota: int,
+        allow_unregistered: bool = True,
+    ) -> "CallerPolicyStore":
         if not raw.strip():
-            return cls({}, default_quota)
+            return cls({}, default_quota, allow_unregistered)
 
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
@@ -43,14 +60,14 @@ class CallerPolicyStore:
                 maximum_severity=maximum_severity,
                 maximum_concurrent_investigations=quota,
             )
-        return cls(policies, default_quota)
+        return cls(policies, default_quota, allow_unregistered)
 
     def get(self, appid: str) -> CallerPolicy:
         policy = self._policies.get(appid)
         if policy:
             return policy
         # Empty configuration preserves the existing local development behavior.
-        if not self._policies:
+        if not self._policies and self._allow_unregistered:
             return CallerPolicy(
                 appid=appid,
                 display_name=appid,
@@ -67,3 +84,85 @@ class CallerPolicyStore:
         if SEVERITY_ORDER[severity] > SEVERITY_ORDER[policy.maximum_severity]:
             raise ValueError(f"Requested severity exceeds caller policy limit ({policy.maximum_severity})")
         return policy
+
+    def health_check(self) -> None:
+        return None
+
+
+class RefreshingCallerPolicyStore:
+    def __init__(
+        self,
+        endpoint: str,
+        key: str,
+        label: str,
+        default_quota: int,
+        refresh_interval_seconds: float,
+        maximum_staleness_seconds: float,
+        event_sink: Callable[..., None],
+        client: AzureAppConfigurationClient | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._key = key
+        self._label = label
+        self._default_quota = default_quota
+        self._refresh_interval_seconds = refresh_interval_seconds
+        self._maximum_staleness_seconds = maximum_staleness_seconds
+        self._event_sink = event_sink
+        self._client = client or AzureAppConfigurationClient(endpoint, DefaultAzureCredential())
+        self._clock = clock
+        self._store: CallerPolicyStore | None = None
+        self._etag: Any = None
+        self._last_refresh_attempt = 0.0
+        self._last_success = 0.0
+        self._lock = Lock()
+        try:
+            self.refresh(force=True)
+        except ValueError:
+            pass
+
+    def refresh(self, force: bool = False) -> None:
+        with self._lock:
+            now = self._clock()
+            if not force and now - self._last_refresh_attempt < self._refresh_interval_seconds:
+                return
+            self._last_refresh_attempt = now
+            try:
+                setting = self._client.get_configuration_setting(key=self._key, label=self._label or None)
+                if self._store is None or setting.etag != self._etag:
+                    self._store = CallerPolicyStore.from_json(
+                        setting.value or "",
+                        self._default_quota,
+                        allow_unregistered=False,
+                    )
+                    self._etag = setting.etag
+                    self._event_sink("caller_policy_snapshot_updated", source="app_configuration")
+                self._last_success = now
+            except Exception as exc:
+                cache_is_usable = (
+                    self._store is not None and now - self._last_success <= self._maximum_staleness_seconds
+                )
+                self._event_sink(
+                    "caller_policy_refresh_failed",
+                    source="app_configuration",
+                    using_last_known_good=cache_is_usable,
+                    error_type=type(exc).__name__,
+                )
+                if not cache_is_usable:
+                    raise ValueError("Caller policy is unavailable") from exc
+
+    def get(self, appid: str) -> CallerPolicy:
+        self.refresh()
+        if self._store is None:
+            raise ValueError("Caller policy is unavailable")
+        return self._store.get(appid)
+
+    def authorize(self, appid: str, severity: str) -> CallerPolicy:
+        self.refresh()
+        if self._store is None:
+            raise ValueError("Caller policy is unavailable")
+        return self._store.authorize(appid, severity)
+
+    def health_check(self) -> None:
+        self.refresh(force=True)
+        if self._store is None:
+            raise ValueError("Caller policy is unavailable")

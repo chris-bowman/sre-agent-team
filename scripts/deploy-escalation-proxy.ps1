@@ -22,6 +22,12 @@ param (
     [string] $PipIndexUrl = 'https://packagefeedproxy.microsoft.io/pypi/simple/',
     [string] $ProxyEntraAppId = '',
     [string] $CallerPoliciesJson = '',
+    [string] $AppConfigurationName = '',
+    [string] $CallerPolicyKey = 'escalation/caller-policies',
+    [string] $CallerPolicyLabel = 'production',
+    [ValidateRange(1, 3600)] [int] $CallerPolicyRefreshSeconds = 30,
+    [ValidateRange(1, 86400)] [int] $CallerPolicyMaxStalenessSeconds = 300,
+    [ValidateRange(60, 1800)] [int] $AppConfigurationRbacTimeoutSeconds = 600,
     [string] $McpAllowedHosts = '',
     [ValidateRange(1, 100)] [int] $MinReplicas = 1,
     [ValidateRange(1, 100)] [int] $MaxReplicas = 5,
@@ -56,6 +62,38 @@ if ($ImageTag -eq 'latest') {
 }
 if ($MaxReplicas -lt $MinReplicas) {
     throw 'MaxReplicas must be greater than or equal to MinReplicas.'
+}
+if ($CallerPolicyMaxStalenessSeconds -lt $CallerPolicyRefreshSeconds) {
+    throw 'CallerPolicyMaxStalenessSeconds must be greater than or equal to CallerPolicyRefreshSeconds.'
+}
+if ([string]::IsNullOrWhiteSpace($AppConfigurationName)) {
+    $subscriptionPrefix = $SubscriptionId.Replace('-', '').Substring(0, 8)
+    $AppConfigurationName = "${ProxyAppName}-${subscriptionPrefix}-config"
+    if ($AppConfigurationName.Length -gt 50) {
+        $AppConfigurationName = $AppConfigurationName.Substring(0, 50).TrimEnd('-')
+    }
+}
+
+$existingRevision = az containerapp show `
+    --name $ProxyAppName `
+    --resource-group $ResourceGroup `
+    --subscription $SubscriptionId `
+    --query properties.latestReadyRevisionName `
+    --output tsv 2>$null
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingRevision)) {
+    $existingRevisionActive = az containerapp revision show `
+        --name $ProxyAppName `
+        --resource-group $ResourceGroup `
+        --subscription $SubscriptionId `
+        --revision $existingRevision `
+        --query properties.active `
+        --output tsv
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to inspect existing proxy revision '$existingRevision'."
+    }
+    if ($existingRevisionActive -ne 'true') {
+        throw "Existing proxy revision '$existingRevision' is inactive. Reactivate it before deployment so a pre-ARM failure cannot leave the service at zero replicas."
+    }
 }
 
 $taggedImageName = "$AcrName.azurecr.io/${ProxyAppName}:$ImageTag"
@@ -252,6 +290,101 @@ if ([string]::IsNullOrWhiteSpace($CallerPoliciesJson)) {
 }
 $callerPoliciesParameterValue = $CallerPoliciesJson.Replace('"', '\"')
 
+if ([string]::IsNullOrWhiteSpace($CallerPoliciesJson)) { $CallerPoliciesJson = '[]' }
+
+Write-Host "`n=== Step 5d: Seed dynamic caller policy in App Configuration ===" -ForegroundColor Cyan
+$appConfiguration = az appconfig show `
+    --name $AppConfigurationName `
+    --resource-group $ResourceGroup `
+    --subscription $SubscriptionId `
+    --output json 2>$null
+if ($LASTEXITCODE -ne 0) {
+    az appconfig create `
+        --name $AppConfigurationName `
+        --resource-group $ResourceGroup `
+        --subscription $SubscriptionId `
+        --location $Location `
+        --sku Free `
+        --disable-local-auth true `
+        --output none
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create App Configuration store '$AppConfigurationName'." }
+}
+
+$appConfigurationId = az appconfig show `
+    --name $AppConfigurationName `
+    --resource-group $ResourceGroup `
+    --subscription $SubscriptionId `
+    --query id `
+    --output tsv
+$appConfigurationEndpoint = az appconfig show `
+    --name $AppConfigurationName `
+    --resource-group $ResourceGroup `
+    --subscription $SubscriptionId `
+    --query endpoint `
+    --output tsv
+az resource update `
+    --ids $appConfigurationId `
+    --api-version 2024-05-01 `
+    --set properties.disableLocalAuth=true properties.dataPlaneProxy.authenticationMode=Pass-through properties.dataPlaneProxy.privateLinkDelegation=Disabled `
+    --output none
+if ($LASTEXITCODE -ne 0) { throw 'Failed to enforce App Configuration authentication settings.' }
+
+$signedInPrincipalId = az ad signed-in-user show --query id --output tsv
+if ([string]::IsNullOrWhiteSpace($signedInPrincipalId)) {
+    throw 'Could not resolve the signed-in user for App Configuration policy administration.'
+}
+$dataOwnerRoleId = '5ae67dd6-50cb-40e7-96ff-dc2bfa4b606b'
+$dataOwnerAssignmentsJson = az role assignment list `
+    --assignee-object-id $signedInPrincipalId `
+    --scope $appConfigurationId `
+    --role $dataOwnerRoleId `
+    --output json
+if ($LASTEXITCODE -ne 0) { throw 'Failed to inspect App Configuration Data Owner assignments.' }
+$dataOwnerAssignmentCount = @($dataOwnerAssignmentsJson | ConvertFrom-Json).Count
+if ($dataOwnerAssignmentCount -eq 0) {
+    az role assignment create `
+        --assignee-object-id $signedInPrincipalId `
+        --assignee-principal-type User `
+        --role $dataOwnerRoleId `
+        --scope $appConfigurationId `
+        --output none
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to grant App Configuration Data Owner to the signed-in operator.' }
+}
+
+$policySeeded = $false
+$policySeedDeadline = [DateTimeOffset]::UtcNow.AddSeconds($AppConfigurationRbacTimeoutSeconds)
+$attempt = 0
+while (-not $policySeeded) {
+    $attempt++
+    try {
+        $existingPolicySetting = Get-AppConfigurationSetting `
+            -Endpoint $appConfigurationEndpoint `
+            -Key $CallerPolicyKey `
+            -Label $CallerPolicyLabel `
+            -AllowNotFound
+        if ($null -eq $existingPolicySetting) {
+            $null = Set-AppConfigurationSetting `
+                -Endpoint $appConfigurationEndpoint `
+                -Key $CallerPolicyKey `
+                -Label $CallerPolicyLabel `
+                -Value $CallerPoliciesJson `
+                -Tags @{ operation = 'deployment-migration' }
+            Write-Host 'Seeded caller policy in App Configuration.' -ForegroundColor Green
+        } else {
+            Write-Host 'Preserving existing caller policy in App Configuration.' -ForegroundColor Green
+        }
+        $policySeeded = $true
+    } catch {
+        $remainingSeconds = [math]::Floor(($policySeedDeadline - [DateTimeOffset]::UtcNow).TotalSeconds)
+        if ($remainingSeconds -le 0) {
+            throw "App Configuration data-plane access did not become ready within $AppConfigurationRbacTimeoutSeconds seconds. The active Container App revision was left unchanged."
+        }
+        $retrySeconds = [math]::Min([math]::Min([math]::Pow(2, [math]::Min($attempt, 5)), 30), $remainingSeconds)
+        Write-Warning "App Configuration data-plane access is not ready; retrying in $retrySeconds seconds (up to $remainingSeconds seconds remaining)."
+        Start-Sleep -Seconds $retrySeconds
+    }
+}
+
 $deployOutputJson = az deployment group create `
     --resource-group $ResourceGroup `
     --template-file "$PSScriptRoot\..\escalation-proxy\infrastructure\main.bicep" `
@@ -264,6 +397,11 @@ $deployOutputJson = az deployment group create `
         tenantId=$tenantId `
         entraAppClientId=$entraAppId `
         callerPoliciesJson=$callerPoliciesParameterValue `
+        appConfigurationName=$AppConfigurationName `
+        callerPolicyKey=$CallerPolicyKey `
+        callerPolicyLabel=$CallerPolicyLabel `
+        callerPolicyRefreshSeconds=$CallerPolicyRefreshSeconds `
+        callerPolicyMaxStalenessSeconds=$CallerPolicyMaxStalenessSeconds `
         revisionSuffix=$revisionSuffix `
         sreAgentAdminRoleDefinitionId=$sreAgentAdminRoleId `
         storageTableDataContributorRoleDefinitionId=$storageTableRoleId `
@@ -290,6 +428,7 @@ if ($null -eq $deployOutput) {
 
 $proxyEndpointUrl  = $deployOutput.proxyEndpointUrl.value
 $proxyPrincipalId  = $deployOutput.proxyPrincipalId.value
+$appConfigurationEndpoint = $deployOutput.appConfigurationEndpoint.value
 
 $proxyHost = ([uri]$proxyEndpointUrl).Host
 if ([string]::IsNullOrWhiteSpace($McpAllowedHosts)) {
@@ -328,6 +467,8 @@ Set-DeployState -Key 'ProxyResourceGroup'  -Value $ResourceGroup
 Set-DeployState -Key 'ProxyAppName'        -Value $ProxyAppName
 Set-DeployState -Key 'ProxyImageDigest'    -Value $imageDigest
 Set-DeployState -Key 'ProxyImageReference' -Value $containerImage
+Set-DeployState -Key 'AppConfigurationName' -Value $AppConfigurationName
+Set-DeployState -Key 'AppConfigurationEndpoint' -Value $appConfigurationEndpoint
 
 Write-Host "Save these values for workload agent deployments (also stored in deploy state):"
 Write-Host "  PROXY_ENDPOINT_URL:     $proxyEndpointUrl"

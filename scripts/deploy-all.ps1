@@ -38,6 +38,11 @@ param (
     [ValidateSet('table', 'memory')] [string] $RegistryBackend = 'table',
     [ValidateRange(1, 100)] [int] $ProxyMinReplicas = 1,
     [ValidateRange(1, 100)] [int] $ProxyMaxReplicas = 5,
+    [string] $AppConfigurationName = '',
+    [string] $CallerPolicyKey = 'escalation/caller-policies',
+    [string] $CallerPolicyLabel = 'production',
+    [ValidateRange(1, 3600)] [int] $CallerPolicyRefreshSeconds = 30,
+    [ValidateRange(1, 86400)] [int] $CallerPolicyMaxStalenessSeconds = 300,
     [switch] $EnablePrivateNetworking,
     [string] $PrivateNetworkName = '',
     [string] $PrivateNetworkAddressPrefix = '10.42.0.0/16',
@@ -122,6 +127,11 @@ if ($Phases -contains 'proxy') {
         RegistryBackend = $RegistryBackend
         MinReplicas     = $ProxyMinReplicas
         MaxReplicas     = $ProxyMaxReplicas
+        AppConfigurationName = $AppConfigurationName
+        CallerPolicyKey = $CallerPolicyKey
+        CallerPolicyLabel = $CallerPolicyLabel
+        CallerPolicyRefreshSeconds = $CallerPolicyRefreshSeconds
+        CallerPolicyMaxStalenessSeconds = $CallerPolicyMaxStalenessSeconds
         PrivateNetworkName = $PrivateNetworkName
         PrivateNetworkAddressPrefix = $PrivateNetworkAddressPrefix
         ContainerEnvironmentSubnetPrefix = $ContainerEnvironmentSubnetPrefix

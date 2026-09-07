@@ -77,6 +77,74 @@ function Resolve-Value {
     return Get-DeployState -Key $StateKey
 }
 
+function Get-AppConfigurationSetting {
+    param(
+        [Parameter(Mandatory)] [string] $Endpoint,
+        [Parameter(Mandatory)] [string] $Key,
+        [Parameter(Mandatory)] [string] $Label,
+        [switch] $AllowNotFound
+    )
+
+    $token = az account get-access-token --resource 'https://azconfig.io' --query accessToken --output tsv
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) {
+        throw 'Failed to acquire an Azure App Configuration access token.'
+    }
+    $encodedKey = [uri]::EscapeDataString($Key)
+    $encodedLabel = [uri]::EscapeDataString($Label)
+    $uri = "$($Endpoint.TrimEnd('/'))/kv/$encodedKey`?label=$encodedLabel&api-version=1.0"
+    try {
+        return Invoke-RestMethod -Method Get -Uri $uri -Headers @{
+            Authorization = "Bearer $token"
+            Accept = 'application/vnd.microsoft.appconfig.kv+json'
+        }
+    } catch {
+        if ($AllowNotFound -and $_.Exception.Response.StatusCode -eq 404) { return $null }
+        throw
+    }
+}
+
+function Set-AppConfigurationSetting {
+    param(
+        [Parameter(Mandatory)] [string] $Endpoint,
+        [Parameter(Mandatory)] [string] $Key,
+        [Parameter(Mandatory)] [string] $Label,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Value,
+        [AllowEmptyString()] [string] $Etag = '',
+        [hashtable] $Tags = @{}
+    )
+
+    $token = az account get-access-token --resource 'https://azconfig.io' --query accessToken --output tsv
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) {
+        throw 'Failed to acquire an Azure App Configuration access token.'
+    }
+    $encodedKey = [uri]::EscapeDataString($Key)
+    $encodedLabel = [uri]::EscapeDataString($Label)
+    $uri = "$($Endpoint.TrimEnd('/'))/kv/$encodedKey`?label=$encodedLabel&api-version=1.0"
+    $ifMatch = if ([string]::IsNullOrWhiteSpace($Etag) -or $Etag -eq '*') {
+        $Etag
+    } elseif ($Etag.StartsWith('"') -and $Etag.EndsWith('"')) {
+        $Etag
+    } else {
+        '"' + $Etag + '"'
+    }
+    $headers = @{
+        Authorization = "Bearer $token"
+        Accept = 'application/vnd.microsoft.appconfig.kv+json'
+        'If-Match' = if ([string]::IsNullOrWhiteSpace($Etag)) { '*' } else { $ifMatch }
+    }
+    if ([string]::IsNullOrWhiteSpace($Etag)) {
+        $headers.Remove('If-Match')
+        $headers['If-None-Match'] = '*'
+    }
+    $body = @{
+        value = $Value
+        content_type = 'application/json'
+        tags = $Tags
+    } | ConvertTo-Json -Depth 10 -Compress
+    return Invoke-RestMethod -Method Put -Uri $uri -Headers $headers -ErrorAction Stop `
+        -ContentType 'application/vnd.microsoft.appconfig.kv+json' -Body $body
+}
+
 # ── MCP connector materialization ─────────────────────────────────────────────
 # Bicep-deployed AzureARM MCP connectors can persist with null extendedProperties
 # (type/endpoint/armScope) on first create and stay stuck in 'Connecting'. A

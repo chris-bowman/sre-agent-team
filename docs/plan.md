@@ -2,18 +2,33 @@
 
 ## Status
 
-- Overall: Production Table-backed platform restored after the overnight shutdown; two-caller isolation and complete lifecycle validated
-- Current work package: WP2/WP8 release hardening - MCP conformance and security automation
-- Last updated: 2026-09-04
+- Overall: Production Table-backed platform recovered and hardened after explicit runtime shutdown; current proxy and workload connector are healthy
+- Current work package: WP8 release hardening - live negative cases, alert delivery, and SRE Agent smoke completion
+- Last updated: 2026-09-07
 - Primary product: Platform SRE Agent and least-privilege escalation proxy
 - Reference consumer: Workload SRE Agent
 - Normative v1 contract: [service-contract-v1.md](service-contract-v1.md)
 
 ## Session checkpoint and continuation plan
 
-**Checkpoint date: 2026-09-04**
+**Checkpoint date: 2026-09-07**
 
-This checkpoint reflects the repo and deployment state as of 2026-09-04 and should be used as the handoff point for future sessions.
+This checkpoint reflects the repo and deployment state as of 2026-09-07 and should be used as the handoff point for future sessions.
+
+### Runtime recovery and release hardening (2026-09-07)
+
+- Azure activity logs established the September 4 outage root cause: the sole proxy revision was explicitly deactivated and both SRE Agent runtimes were explicitly stopped. ARM `provisioningState=Succeeded` was not sufficient evidence that an agent runtime was running.
+- Restored both SRE Agent runtimes and the proxy without replacing stable identities. The current proxy revision is `sre-escalation-proxy--logfix090702`, running two ready replicas on immutable image `acrsrelabjplayn.azurecr.io/sre-escalation-proxy@sha256:7f7f94545c53d8442c00c891748d1f8e19efc9d62f47c9ab6a57f46f99bd3b3f`.
+- All four public health checks return `200`: `/health/live`, `/health/ready`, `/health`, and `/mcp/health`. Readiness now covers caller-policy, registry, and Platform SRE Agent dependencies.
+- Deployment now refuses to proceed when the existing latest-ready revision is inactive, uses unique immutable image tags resolved to ACR digests, and waits with a bounded retry loop for App Configuration data-plane RBAC propagation before ARM deployment.
+- Caller policy authority moved to Azure App Configuration key `escalation/caller-policies` with label `production`. Routine deployment seeds only when the key is absent, preserving operator-managed policy. Quoted ETag conditional writes and terminating REST failures prevent false-success policy updates. Five production caller policies remain registered.
+- App Configuration refresh uses a bounded cache and valid last-known-good snapshot. Startup fails closed without an initial policy, and readiness fails when no current or acceptable last-known-good policy exists.
+- Platform dependency calls now use explicit timeouts, bounded retries with jitter, a circuit breaker, and safe `503` responses. Registry and Platform SRE Agent dependency failures were exercised against readiness and recovery behavior; alert resources and delivered-alert evidence remain open under P8.9.
+- Sensitive-log review found that `platform_thread_created` included the platform thread ID. The field was removed, a regression test was added, and the logging-fix image above was deployed. Recent current-revision logs contain no bearer/authorization material, SAS-like values, report bodies, or `platform_thread_id` on the audited lifecycle events.
+- The supported deployment script built the immutable image but was blocked before ARM deployment by Microsoft Graph CAE error `TokenCreatedWithOutdatedPolicies`. The already-built digest was deployed through the Bicep-owned path with existing stable Entra values; a fresh interactive sign-in is still required before the Graph-dependent full script can run normally.
+- After proxy deployment, WorkloadApp's connector regressed to `Connecting` and custom-agent definitions returned `404`. Delete/recreate connector synchronization, custom-agent republish, and bounded status polling restored `platform-escalation-mi` to `Connected`, healthy, with all three tools.
+- Local validation is green: Ruff format and lint, mypy, compileall, 69 pytest tests, 9 PowerShell parses, 6 Bicep builds, 3 Bicep parameter builds, and `git diff --check` all pass.
+- An SRE-Agent-originated smoke selected `workload-escalation-parent`, delegated to `platform-escalation`, created exactly one synthetic read-only investigation, polled it to completion, retrieved the summary, and returned a structured final report. Both delegated task groups completed without failure, the agent reported eight tool calls over approximately 232 seconds, no Azure resources were modified, all health checks remained green, and no proxy errors or sensitive log markers were observed.
 
 ### Overnight restoration and functional validation (2026-09-04)
 
@@ -62,23 +77,22 @@ This checkpoint reflects the repo and deployment state as of 2026-09-04 and shou
 ### Still open / release-gated
 
 - **Caller administration and negative authorization**: Independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, restart survival, and live disabled/revoked caller operations are validated. Remaining live idempotency and severity-limit cases are open.
-- **Official MCP conformance**: Add official-client protocol coverage for negotiation, reconnect behavior, malformed requests, and all supported tool paths.
-- **Outage behavior**: Validate registry and Platform SRE Agent failures against readiness, retries, public errors, metrics, and alerts.
+- **Official MCP conformance**: Complete; official-client tests cover negotiation, reconnect behavior, malformed requests, authorization failures, and all supported tool paths.
+- **Outage behavior**: Readiness, retries, safe public errors, and recovery were validated for registry and Platform SRE Agent failures. Deployed alert resources and delivered-alert evidence remain open.
 - **Immutable image/release controls**: Complete; deployment resolves the pushed tag to a validated ACR digest, the base image is digest-pinned, and all runtime packages are exact-pinned.
-- **Repository governance files and CI/security checks**: License, contributor guide, release policy, image scanning, CI workflow remain open
+- **Repository governance files and CI/security checks**: MIT license, contribution guide, security policy, code of conduct, changelog, operations guidance, CI checks, and image scanning are implemented.
 
 ### Highest-priority next actions for the next session
 
-1. **Official MCP conformance (P2.7)**: Add SDK-client coverage for protocol negotiation, discovery, all tool calls, malformed requests, errors, and reconnect behavior.
-2. **Security/release automation (P8.1/P8.4)**: Add formatting, linting, typing, dependency/security checks, and container image scanning to CI.
-3. **Caller operations and outage gates (P5.3/P8.9)**: Implement idempotent caller administration, then test disabled/revoked callers and dependency outages.
-4. **Repository governance (P7.8)**: Add owner-selected license, contribution, security, code-of-conduct, and changelog files before release.
+1. **Remaining caller gates (P8.8)**: Run live same-payload idempotency replay and severity-ceiling denial cases.
+2. **Alert delivery gate (P8.9)**: Deploy or configure the documented availability/security alerts and prove notification delivery.
+3. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent full deployment run.
 
 ### Working assumptions for future work
 
 - The platform service remains the primary product; the workload SRE Agent remains a reference consumer example.
 - Azure Table Storage is actively deployed and validated for same-caller quota rejection, terminal slot reuse, cross-replica lifecycle access, restart safety, simultaneous independent callers, and reciprocal cross-caller denial.
-- Future work should address official-client conformance, security automation, caller administration, outage testing, and the reviewed repository cleanup candidates.
+- Future work should finish the two remaining live caller-policy cases and deployed alert-delivery evidence.
 
 ## Objective
 
@@ -316,7 +330,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P6.6 Emit safe redaction and schema-rejection metrics without sensitive values.
 - [ ] P6.7 Define structured audit events and metrics for authorization, admission, idempotency, quotas, latency, completion, failures, registry health, and platform dependencies.
 - [x] P6.8 Propagate one correlation ID end to end without exposing the platform thread ID.
-- [ ] P6.9 Add alert and dashboard guidance for security and availability signals.
+- [x] P6.9 Add alert and dashboard guidance for security and availability signals. `docs/operations.md` defines actionable thresholds, response guidance, and safe alert fields; deploying alert resources remains part of P8.9.
 
 ### WP6 Acceptance Criteria
 
@@ -335,7 +349,7 @@ Do not start production networking or repository-wide terminology changes before
 - [ ] P7.5 Split fixed ALZ assumptions into a sample playbook or explicit platform-owned configuration.
 - [x] P7.6 Add one generic MCP client example using same-tenant application identity.
 - [x] P7.7 Add one generic HTTP client example using same-tenant application identity.
-- [ ] P7.8 Add owner-selected LICENSE, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, and CHANGELOG.md.
+- [x] P7.8 Add owner-selected LICENSE, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md, and CHANGELOG.md. The repository uses the MIT license.
 - [x] P7.9 Add architecture decision records for authentication, transport, and storage.
 - [x] P7.10 Archive the historical phase summary after incorporating still-relevant decisions.
 
@@ -357,8 +371,8 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P8.6 Remove generated ARM JSON from source control; Bicep source is authoritative and templates are rebuilt during validation.
 - [x] P8.7 Add a staging end-to-end test with two independent caller identities. Overlapping WorkloadApp and WorkloadIsolation investigations completed on separate caller partitions on 2026-09-01, and a fresh simultaneous two-caller smoke passed after restoration on 2026-09-04.
 - [ ] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed. On 2026-09-04, a five-caller allowlist was activated; both workload agents completed positive-path escalations, WorkloadIsolation was denied while disabled and again after revoke, WorkloadApp remained authorized as the control, re-grant recovery succeeded, and all five callers were restored on healthy revision `sre-escalation-proxy--0000020`. Remaining live idempotency and severity-limit cases are open.
-- [ ] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts.
-- [x] P8.10 Verify Azure SRE Agent reference connector compatibility. The fresh WorkloadApp connector completed the create/status/findings lifecycle in staging on 2026-08-27.
+- [ ] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts. Dependency-aware readiness, bounded retry/circuit-breaker behavior, safe `503` responses, and genuine recovery were validated on 2026-09-07. Deployed alert resources and delivered-alert evidence remain open.
+- [x] P8.10 Verify Azure SRE Agent reference connector compatibility. The fresh WorkloadApp connector completed the create/status/findings lifecycle in staging on 2026-08-27. After the 2026-09-07 runtime recovery, the connector was restored to `Connected`, healthy, with three tools. A fresh WorkloadApp-originated smoke then selected `workload-escalation-parent`, delegated to `platform-escalation`, and completed the create/status/findings lifecycle with a structured final report and no resource modifications.
 
 ### V1 Release Gate
 
@@ -371,7 +385,7 @@ A v1 release is allowed only when all of the following are true:
 - [x] HTTP OpenAPI compatibility checks pass.
 - [x] Multi-replica and restart tests preserve ownership and state. Two-replica lifecycle and in-flight rolling restart survival passed on 2026-09-01.
 - [x] Security scans pass or have explicitly accepted findings. CI gates dependency vulnerabilities, medium/high source findings, and fixable high/critical container findings; unfixed base-image advisories remain visible in Trivy reports, and low-severity non-cryptographic retry jitter is accepted.
-- [ ] Manual log inspection finds no tokens, platform thread IDs, or unredacted sensitive findings.
+- [x] Manual log inspection finds no tokens, platform thread IDs, or unredacted sensitive findings. The 2026-09-07 audit found and removed `platform_thread_id` from `platform_thread_created`; regression coverage passes, the corrected immutable image is live, and sampled current-revision lifecycle logs contain no bearer/authorization material, SAS-like values, platform thread IDs, or report bodies.
 
 ## Affected Files
 

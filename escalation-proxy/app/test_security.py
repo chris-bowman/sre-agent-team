@@ -35,6 +35,7 @@ from main import (
     GetInvestigationRequest,
     InvestigationRecord,
     InvestigationRegistry,
+    PlatformCircuitBreaker,
     RedactedSummaryResponse,
     TableStorageInvestigationRegistry,
     _create_investigation_impl,
@@ -502,6 +503,30 @@ async def test_platform_request_retries_transient_status_before_success():
     assert get.await_count == 2
 
 
+def test_platform_circuit_breaker_rejects_requests_while_open():
+    breaker = PlatformCircuitBreaker(failure_threshold=2, recovery_seconds=30)
+
+    breaker.record_failure()
+    breaker.record_failure()
+
+    with pytest.raises(HTTPException) as exc:
+        breaker.before_request()
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Platform SRE Agent is temporarily unavailable"
+
+
+def test_platform_circuit_breaker_closes_after_successful_probe():
+    breaker = PlatformCircuitBreaker(failure_threshold=1, recovery_seconds=1)
+    breaker.record_failure()
+
+    with patch("main.time.monotonic", return_value=breaker._opened_at + 2):
+        breaker.before_request()
+        breaker.record_success()
+
+    breaker.before_request()
+
+
 def test_registry_idempotency_replays_matching_request_and_rejects_conflict(registry):
     first_id = registry.create_investigation(
         caller_oid="oid1",
@@ -646,6 +671,7 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
         patch("main._caller_policy_store.authorize", return_value=policy),
         patch("main.get_platform_agent_token", return_value="platform-token"),
         patch("main._platform_request", new_callable=AsyncMock, return_value=platform_response) as platform_request,
+        patch("main.log_event") as event,
     ):
         result = await _create_investigation_impl(request, caller)
 
@@ -653,6 +679,8 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
     message = platform_request.await_args.kwargs["json"]["StartMessage"]["Text"]
     assert f"Correlation ID: {record.request_correlation_id}" in message
     assert record.platform_thread_id == "private-thread-id"
+    created_event = next(call for call in event.call_args_list if call.args[0] == "platform_thread_created")
+    assert "platform_thread_id" not in created_event.kwargs
 
 
 def test_v1_create_rejects_oversized_idempotency_key():
@@ -1040,6 +1068,16 @@ def test_readiness_check_reports_dependency_failure_without_details():
     assert "secret platform detail" not in response.text
 
 
+def test_readiness_check_reports_policy_failure_without_details():
+    client = TestClient(app)
+    with patch("main._caller_policy_store.health_check", side_effect=RuntimeError("secret policy detail")):
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+    assert "secret policy detail" not in response.text
+
+
 def test_readiness_check_reports_registry_failure_without_details():
     client = TestClient(app)
     with patch("main._investigation_registry.health_check", side_effect=RuntimeError("secret registry detail")):
@@ -1169,6 +1207,7 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
                             {
                                 "description": "Investigate a service failure.",
                                 "workload_name": "reference-consumer",
+                                "idempotency_key": "mcp-create-123",
                             },
                         )
                         status_result = await session.call_tool(
@@ -1186,6 +1225,7 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
     assert not summary_result.isError
     assert unknown_result.isError
     assert create_impl.await_args.args[1] is caller
+    assert create_impl.await_args.args[2] == "mcp-create-123"
     assert status_impl.await_args.args[1] is caller
     assert summary_impl.await_args.args[1] is caller
 

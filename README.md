@@ -26,7 +26,13 @@ Reference consumer: Workload SRE Agent → Platform Escalation Service
 
 See [docs/service-contract-v1.md](docs/service-contract-v1.md) for supported transports,
 schemas, and error behavior. See [docs/architecture.md](docs/architecture.md) for full diagrams
-and RBAC tables.
+and RBAC tables. Production DNS, egress, monitoring, and recovery guidance is in
+[docs/operations.md](docs/operations.md).
+
+Contributions are governed by [CONTRIBUTING.md](CONTRIBUTING.md),
+[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+The project is licensed under the [MIT License](LICENSE), and notable changes are recorded in
+[CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -165,6 +171,9 @@ deploy state and uploaded to the agent. The script also uploads
 explicitly with `-PlatformAgentId` / `-PlatformAgentEndpoint` if running standalone).
 The script resolves the **SRE Agent Administrator** role GUID automatically and passes it
 to Bicep. Outputs `PROXY_ENDPOINT_URL` and `PROXY_ENTRA_CLIENT_ID` are saved to state.
+For an existing app, the script requires the latest ready revision to be active before it
+builds a replacement. It also waits for App Configuration data-plane RBAC propagation before
+seeding the initial caller policy. A timeout leaves the active Container App revision unchanged.
 
 ### 3. App team: Deploy Workload SRE Agent
 
@@ -322,7 +331,13 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `ImageTag` | No | UTC timestamp (`yyyyMMddHHmmss`) | Traceability tag used for the ACR build. Deployment resolves and uses the resulting immutable image digest; `latest` is rejected. |
 | `PipIndexUrl` | No | Microsoft corporate package proxy | HTTPS Python package feed passed to the container build. Do not include credentials in committed commands or files. |
 | `ProxyEntraAppId` | No | Existing matching app or new app | Stable proxy Entra application client ID. Pass explicitly when display-name lookup is unavailable or ambiguous. |
-| `CallerPoliciesJson` | No | Existing deployed value, then `''` | Explicit caller policy JSON. When omitted, routine deployment preserves the current Container App value. |
+| `CallerPoliciesJson` | No | Existing deployed value, then `[]` | Initial migration value used only when the App Configuration policy key is absent. Routine deployments preserve the existing App Configuration value. |
+| `AppConfigurationName` | No | Derived from proxy name and subscription | App Configuration store containing the dynamic caller policy. |
+| `CallerPolicyKey` | No | `escalation/caller-policies` | App Configuration key containing the caller policy JSON array. |
+| `CallerPolicyLabel` | No | `production` | App Configuration label for the active policy. |
+| `CallerPolicyRefreshSeconds` | No | `30` | Interval between proxy policy refresh attempts. |
+| `CallerPolicyMaxStalenessSeconds` | No | `300` | Maximum age of the last-known-good policy before authorization fails closed. |
+| `AppConfigurationRbacTimeoutSeconds` | No | `600` | Maximum time to wait for operator App Configuration data-plane RBAC propagation before failing without changing the active revision. |
 | `McpAllowedHosts` | No | Proxy host plus localhost | Comma-separated MCP host allowlist configured after deployment. |
 | `MinReplicas` | No | `1` | Minimum Container App replicas. Use at least `2` for production. |
 | `MaxReplicas` | No | `5` | Maximum Container App replicas; must be at least `MinReplicas`. |

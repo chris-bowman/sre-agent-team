@@ -53,7 +53,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from caller_policy import CallerPolicyStore
+from caller_policy import CallerPolicyStore, RefreshingCallerPolicyStore
 from contracts import (
     CreateInvestigationRequest,
     CreateInvestigationV1Request,
@@ -92,6 +92,14 @@ REGISTRY_BACKEND = os.environ.get("REGISTRY_BACKEND", "memory").strip().lower()
 REGISTRY_TABLE_ENDPOINT = os.environ.get("REGISTRY_TABLE_ENDPOINT", "").rstrip("/")
 REGISTRY_TABLE_NAME = os.environ.get("REGISTRY_TABLE_NAME", "InvestigationRegistry")
 CALLER_POLICIES_JSON = os.environ.get("CALLER_POLICIES_JSON", "")
+APP_CONFIG_ENDPOINT = os.environ.get("APP_CONFIG_ENDPOINT", "").rstrip("/")
+CALLER_POLICY_KEY = os.environ.get("CALLER_POLICY_KEY", "escalation/caller-policies")
+CALLER_POLICY_LABEL = os.environ.get("CALLER_POLICY_LABEL", "production")
+CALLER_POLICY_REFRESH_SECONDS = max(float(os.environ.get("CALLER_POLICY_REFRESH_SECONDS", "30")), 1.0)
+CALLER_POLICY_MAX_STALENESS_SECONDS = max(
+    float(os.environ.get("CALLER_POLICY_MAX_STALENESS_SECONDS", "300")),
+    CALLER_POLICY_REFRESH_SECONDS,
+)
 
 # ── Resource Limits and Quotas ───────────────────────────────────────────────
 MAX_INVESTIGATION_DESCRIPTION_SIZE = 5000  # characters
@@ -114,6 +122,8 @@ MAX_STATUS_WAIT_SECONDS = min(int(os.environ.get("MAX_STATUS_WAIT_SECONDS", "90"
 STATUS_POLL_INTERVAL_SECONDS = int(os.environ.get("STATUS_POLL_INTERVAL_SECONDS", "5"))
 PLATFORM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("PLATFORM_REQUEST_TIMEOUT_SECONDS", "30"))
 PLATFORM_REQUEST_MAX_ATTEMPTS = int(os.environ.get("PLATFORM_REQUEST_MAX_ATTEMPTS", "3"))
+PLATFORM_CIRCUIT_FAILURE_THRESHOLD = max(int(os.environ.get("PLATFORM_CIRCUIT_FAILURE_THRESHOLD", "5")), 1)
+PLATFORM_CIRCUIT_RECOVERY_SECONDS = max(float(os.environ.get("PLATFORM_CIRCUIT_RECOVERY_SECONDS", "30")), 1.0)
 ALLOWED_SEVERITY_LEVELS = {"low", "medium", "high", "critical"}
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 SEVERITY_CLAIM = os.environ.get("SEVERITY_CLAIM", "max_escalation_severity")
@@ -764,13 +774,69 @@ def build_investigation_registry() -> InvestigationRegistry | TableStorageInvest
     return InvestigationRegistry()
 
 
-_investigation_registry = build_investigation_registry()
-_caller_policy_store = CallerPolicyStore.from_json(CALLER_POLICIES_JSON, MAX_INVESTIGATIONS_PER_WORKLOAD)
-
-
 def log_event(event: str, **fields: Any) -> None:
     payload = {"event": event, **fields}
     logger.info(json.dumps(payload, sort_keys=True, default=str))
+
+
+_investigation_registry = build_investigation_registry()
+_caller_policy_store = (
+    RefreshingCallerPolicyStore(
+        endpoint=APP_CONFIG_ENDPOINT,
+        key=CALLER_POLICY_KEY,
+        label=CALLER_POLICY_LABEL,
+        default_quota=MAX_INVESTIGATIONS_PER_WORKLOAD,
+        refresh_interval_seconds=CALLER_POLICY_REFRESH_SECONDS,
+        maximum_staleness_seconds=CALLER_POLICY_MAX_STALENESS_SECONDS,
+        event_sink=log_event,
+    )
+    if APP_CONFIG_ENDPOINT
+    else CallerPolicyStore.from_json(CALLER_POLICIES_JSON, MAX_INVESTIGATIONS_PER_WORKLOAD)
+)
+
+
+class PlatformCircuitBreaker:
+    def __init__(self, failure_threshold: int, recovery_seconds: float) -> None:
+        self.failure_threshold = failure_threshold
+        self.recovery_seconds = recovery_seconds
+        self._failure_count = 0
+        self._opened_at: float | None = None
+        self._probe_in_flight = False
+        self._lock = Lock()
+
+    def before_request(self) -> None:
+        with self._lock:
+            if self._opened_at is None:
+                return
+            if time.monotonic() - self._opened_at < self.recovery_seconds or self._probe_in_flight:
+                raise HTTPException(status_code=503, detail="Platform SRE Agent is temporarily unavailable")
+            self._probe_in_flight = True
+
+    def record_success(self) -> None:
+        with self._lock:
+            was_open = self._opened_at is not None
+            self._failure_count = 0
+            self._opened_at = None
+            self._probe_in_flight = False
+        if was_open:
+            log_event("platform_circuit_closed")
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._probe_in_flight = False
+            self._failure_count += 1
+            should_open = self._failure_count >= self.failure_threshold
+            was_open = self._opened_at is not None
+            if should_open:
+                self._opened_at = time.monotonic()
+        if should_open and not was_open:
+            log_event("platform_circuit_opened", failure_threshold=self.failure_threshold)
+
+
+_platform_circuit_breaker = PlatformCircuitBreaker(
+    PLATFORM_CIRCUIT_FAILURE_THRESHOLD,
+    PLATFORM_CIRCUIT_RECOVERY_SECONDS,
+)
 
 
 def get_platform_agent_token() -> str:
@@ -781,6 +847,7 @@ def get_platform_agent_token() -> str:
 
 async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -> httpx.Response:
     """Call the Platform SRE Agent with bounded retries for transient failures."""
+    _platform_circuit_breaker.before_request()
     retryable_statuses = {429, 500, 502, 503, 504}
     last_error: Exception | None = None
     for attempt in range(PLATFORM_REQUEST_MAX_ATTEMPTS):
@@ -794,6 +861,7 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
                 )
             if response.status_code not in retryable_statuses:
                 response.raise_for_status()
+                _platform_circuit_breaker.record_success()
                 return response
             last_error = httpx.HTTPStatusError(
                 "Transient platform response", request=response.request, response=response
@@ -804,6 +872,7 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
         if attempt + 1 < PLATFORM_REQUEST_MAX_ATTEMPTS:
             await asyncio.sleep((0.25 * (2**attempt)) + random.uniform(0, 0.1))
 
+    _platform_circuit_breaker.record_failure()
     log_event("platform_request_failed", method=method, path=path, attempts=PLATFORM_REQUEST_MAX_ATTEMPTS)
     raise HTTPException(status_code=503, detail="Platform SRE Agent is temporarily unavailable") from last_error
 
@@ -1290,7 +1359,6 @@ async def _create_investigation_impl(
     log_event(
         "platform_thread_created",
         investigation_id=investigation_id,
-        platform_thread_id=thread_id,
         workload_name=req.workload_name,
         caller_appid=caller.appid,
     )
@@ -1512,7 +1580,12 @@ async def health_check():
 
 @app.get("/health/ready")
 async def readiness_check():
-    """Report whether required registry and platform identity dependencies are usable."""
+    """Report whether required policy, registry, and platform dependencies are usable."""
+    try:
+        _caller_policy_store.health_check()
+    except Exception:
+        log_event("readiness_check_failed", dependency="caller_policy")
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
     try:
         _investigation_registry.health_check()
     except Exception:

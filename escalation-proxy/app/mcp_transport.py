@@ -91,6 +91,7 @@ def create_mcp_app():
         workload_name: str,
         severity: str = "medium",
         context: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         """Create an investigation through the Platform Escalation Service."""
         from main import CreateInvestigationRequest, _create_investigation_impl
@@ -103,6 +104,7 @@ def create_mcp_app():
                 context=context,
             ),
             _require_caller(),
+            idempotency_key,
         )
 
     @server.tool()

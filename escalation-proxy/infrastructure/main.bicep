@@ -37,6 +37,23 @@ param entraAppClientId string
 @description('Operator-managed same-tenant caller policies serialized as JSON.')
 param callerPoliciesJson string = ''
 
+@description('Azure App Configuration store name for dynamic caller policy. The deployment script creates and seeds it before the Container App starts.')
+param appConfigurationName string = take('${proxyAppName}-config', 50)
+
+@description('App Configuration key containing the caller policy JSON array.')
+param callerPolicyKey string = 'escalation/caller-policies'
+
+@description('App Configuration label for the active caller policy environment.')
+param callerPolicyLabel string = 'production'
+
+@minValue(1)
+@description('Seconds between caller policy refresh attempts.')
+param callerPolicyRefreshSeconds int = 30
+
+@minValue(1)
+@description('Maximum age of the last-known-good caller policy before authorization fails closed.')
+param callerPolicyMaxStalenessSeconds int = 300
+
 @description('Role definition GUID for the built-in "SRE Agent Administrator" role. Resolve at deploy time with: az role definition list --name "SRE Agent Administrator" --query "[0].name" -o tsv. deploy-escalation-proxy.ps1 passes this automatically.')
 param sreAgentAdminRoleDefinitionId string
 
@@ -91,6 +108,14 @@ param maxReplicas int = 5
 @maxValue(730)
 @description('Log Analytics workspace retention in days.')
 param logRetentionDays int = 30
+
+@minValue(1)
+@description('Number of exhausted Platform SRE Agent requests that opens the circuit breaker.')
+param platformCircuitFailureThreshold int = 5
+
+@minValue(1)
+@description('Seconds an open Platform SRE Agent circuit waits before allowing one recovery probe.')
+param platformCircuitRecoverySeconds int = 30
 
 // ── Log Analytics for Container Apps ────────────────────────────────────────
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -251,6 +276,33 @@ resource proxyUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31'
   location: location
 }
 
+resource appConfiguration 'Microsoft.AppConfiguration/configurationStores@2024-05-01' = {
+  name: appConfigurationName
+  location: location
+  sku: {
+    name: 'free'
+  }
+  properties: {
+    disableLocalAuth: true
+    publicNetworkAccess: 'Enabled'
+    dataPlaneProxy: {
+      authenticationMode: 'Pass-through'
+      privateLinkDelegation: 'Disabled'
+    }
+  }
+}
+
+resource appConfigurationReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(appConfiguration.id, proxyUami.id, 'App Configuration Data Reader')
+  scope: appConfiguration
+  properties: {
+    principalId: proxyUami.properties.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '516239f1-63e1-4d78-a4de-a74fb236a071')
+    principalType: 'ServicePrincipal'
+    description: 'Escalation proxy reads dynamic caller authorization policy'
+  }
+}
+
 // ── Container App Environment ─────────────────────────────────────────────────
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${proxyAppName}-env'
@@ -273,6 +325,7 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: proxyAppName
   location: location
+  dependsOn: [appConfigurationReaderAssignment]
 
   identity: {
     type: 'UserAssigned'
@@ -327,11 +380,18 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ENTRA_CLIENT_ID', value: entraAppClientId }
             { name: 'AZURE_CLIENT_ID', value: proxyUami.properties.clientId }
             { name: 'CALLER_POLICIES_JSON', value: callerPoliciesJson }
+            { name: 'APP_CONFIG_ENDPOINT', value: appConfiguration.properties.endpoint }
+            { name: 'CALLER_POLICY_KEY', value: callerPolicyKey }
+            { name: 'CALLER_POLICY_LABEL', value: callerPolicyLabel }
+            { name: 'CALLER_POLICY_REFRESH_SECONDS', value: string(callerPolicyRefreshSeconds) }
+            { name: 'CALLER_POLICY_MAX_STALENESS_SECONDS', value: string(callerPolicyMaxStalenessSeconds) }
             { name: 'REGISTRY_BACKEND', value: registryBackend }
             { name: 'REGISTRY_TABLE_ENDPOINT', value: registryBackend == 'table' ? 'https://${registryStorage.name}.table.${environment().suffixes.storage}' : '' }
             { name: 'REGISTRY_TABLE_NAME', value: 'InvestigationRegistry' }
             { name: 'MCP_ALLOWED_HOSTS', value: mcpAllowedHosts }
             { name: 'MCP_ENABLE_DNS_REBINDING_PROTECTION', value: mcpEnableDnsRebindingProtection }
+            { name: 'PLATFORM_CIRCUIT_FAILURE_THRESHOLD', value: string(platformCircuitFailureThreshold) }
+            { name: 'PLATFORM_CIRCUIT_RECOVERY_SECONDS', value: string(platformCircuitRecoverySeconds) }
           ]
         }
       ]
@@ -394,6 +454,12 @@ output registryStorageAccountId string = registryBackend == 'table' ? registrySt
 
 @description('Effective investigation registry backend for this deployment.')
 output registryBackend string = registryBackend
+
+@description('Azure App Configuration endpoint used for dynamic caller policy.')
+output appConfigurationEndpoint string = appConfiguration.properties.endpoint
+
+@description('Azure App Configuration store name used for dynamic caller policy.')
+output appConfigurationName string = appConfiguration.name
 
 @description('Run this command to grant a workload agent MI the EscalationCaller app role.')
 output grantWorkloadAppRoleCommand string = 'az ad app role-assignment create --id <workload-agent-principal-id> --app-id ${entraAppClientId} --app-roles EscalationCaller'

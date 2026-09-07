@@ -4,17 +4,57 @@ on:
   pull_request:
     paths:
       - "escalation-proxy/**"
+      - "modules/**/*.bicep"
+      - "platform/**/*.bicep"
+      - "scripts/**/*.ps1"
+      - "workload/**/*.bicep"
       - ".github/workflows/proxy-validation.yml"
   push:
     branches: [main]
     paths:
       - "escalation-proxy/**"
+      - "modules/**/*.bicep"
+      - "platform/**/*.bicep"
+      - "scripts/**/*.ps1"
+      - "workload/**/*.bicep"
       - ".github/workflows/proxy-validation.yml"
 
 permissions:
   contents: read
 
 jobs:
+  repository-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build Bicep sources
+        shell: pwsh
+        run: |
+          $files = @(git ls-files '*.bicep')
+          if ($files.Count -eq 0) { throw 'No Bicep sources found.' }
+          foreach ($file in $files) {
+            az bicep build --file $file --stdout | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Bicep build failed: $file" }
+          }
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @(git ls-files '*.ps1')
+          if ($files.Count -eq 0) { throw 'No PowerShell scripts found.' }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $messages = $errors | ForEach-Object { $_.Message }
+              throw "PowerShell parse failed: $file`n$($messages -join "`n")"
+            }
+          }
+
   test:
     runs-on: ubuntu-latest
     env:

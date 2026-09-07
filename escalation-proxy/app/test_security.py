@@ -12,6 +12,7 @@ Covers:
   - Rate limiting and expiry
 """
 
+import json
 import time
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,6 +44,7 @@ from main import (
     _get_summary_impl,
     _platform_request,
     app,
+    log_event,
     redact_sensitive_text,
     validate_requested_severity,
 )
@@ -59,6 +61,18 @@ def client():
 def registry():
     """Fresh registry for each test."""
     return InvestigationRegistry()
+
+
+def test_log_event_emits_versioned_utc_json(caplog):
+    caplog.set_level("INFO", logger="main")
+    log_event("audit_test", outcome="success", count=2)
+
+    payload = json.loads(caplog.records[-1].message)
+    assert payload["schema_version"] == "1.0"
+    assert payload["timestamp"].endswith("+00:00")
+    assert payload["event"] == "audit_test"
+    assert payload["outcome"] == "success"
+    assert payload["count"] == 2
 
 
 def create_mcp_test_app():
@@ -678,6 +692,7 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
     record = registry.get_investigation(result["investigation_id"], "oid1", "appid1")
     message = platform_request.await_args.kwargs["json"]["StartMessage"]["Text"]
     assert f"Correlation ID: {record.request_correlation_id}" in message
+    assert message.count("Correlation ID:") == 1
     assert record.platform_thread_id == "private-thread-id"
     created_event = next(call for call in event.call_args_list if call.args[0] == "platform_thread_created")
     assert "platform_thread_id" not in created_event.kwargs

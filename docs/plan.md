@@ -240,7 +240,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P5.10 Deploy immutable image tags or digests and pin runtime dependencies.
 - [x] P5.11 Separate runtime dependencies from development and test dependencies.
 - [x] P5.12 Add bounded retry with jitter, explicit timeouts, circuit-breaking behavior, and dependency-specific status mapping. ✅ Bounded retry, jitter, explicit timeouts, and safe 503 mapping are complete
-- [ ] P5.13 Move caller policy from `CALLER_POLICIES_JSON` to Azure App Configuration so grant, disable, revoke, severity, and quota changes do not create Container App revisions. Use managed identity and least-privilege data-plane RBAC, private networking, environment labels, validated atomic snapshot refresh, bounded propagation time, and last-known-good caching with fail-closed startup and maximum-staleness behavior. Preserve the independent `EscalationCaller` Entra app-role requirement, disabled revoke tombstones, optimistic concurrency for administration, and auditable policy history; remove revision-coupled policy writes only after migration and rollback compatibility are tested.
+- [x] P5.13 Move caller policy from `CALLER_POLICIES_JSON` to Azure App Configuration. Production uses the labeled `escalation/caller-policies` snapshot through managed identity and least-privilege data-plane RBAC over private networking. Refresh validation, bounded propagation, last-known-good caching, fail-closed startup, maximum staleness, disabled tombstones, ETag administration, independent `EscalationCaller` enforcement, revision history, migration, rollback compatibility, and live grant/disable/revoke/severity/quota changes have been tested without creating Container App revisions. `CALLER_POLICIES_JSON` remains only as the documented rollback source when `APP_CONFIG_ENDPOINT` is absent.
 
 ### WP5 Implementation Progress (2026-08-31)
 
@@ -328,7 +328,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P6.4 Reject or quarantine malformed findings instead of returning arbitrary text.
 - [x] P6.5 Retain defense-in-depth redaction for credentials, connection strings, signed URLs, tokens, keys, and multiline/JSON values.
 - [x] P6.6 Emit safe redaction and schema-rejection metrics without sensitive values.
-- [ ] P6.7 Define structured audit events and metrics for authorization, admission, idempotency, quotas, latency, completion, failures, registry health, and platform dependencies.
+- [x] P6.7 Define structured audit events and metrics for authorization, admission, idempotency, quotas, latency, completion, failures, registry health, and platform dependencies. Every JSON event now carries a versioned UTC envelope; lifecycle branches emit safe outcomes, reasons, retry counts, and latency dimensions, and `docs/operations.md` defines the event catalog, prohibited fields, and Log Analytics metric queries. On 2026-09-08, immutable revision `sre-escalation-proxy--260907224914` deployed at two ready replicas and live console logs contained versioned `readiness_check_succeeded` events; the five-caller policy and healthy three-tool connector were preserved.
 - [x] P6.8 Propagate one correlation ID end to end without exposing the platform thread ID.
 - [x] P6.9 Add alert and dashboard guidance for security and availability signals. `docs/operations.md` defines actionable thresholds, response guidance, safe alert fields, and the standalone monitoring deployment; notification delivery remains part of P8.9.
 

@@ -107,7 +107,11 @@ MAX_INVESTIGATION_CONTEXT_SIZE = 10000  # characters
 MAX_WORKLOAD_NAME_SIZE = 256  # characters
 MAX_IDEMPOTENCY_KEY_SIZE = 128
 MAX_EXPIRY_CLEANUP_BATCH_SIZE = int(os.environ.get("MAX_EXPIRY_CLEANUP_BATCH_SIZE", "100"))
-INVESTIGATION_EXPIRY_SECONDS = 86400  # 24 hours
+ACTIVE_METADATA_RETENTION_SECONDS = max(int(os.environ.get("ACTIVE_METADATA_RETENTION_SECONDS", "86400")), 1)
+FINAL_FINDINGS_METADATA_RETENTION_SECONDS = max(
+    int(os.environ.get("FINAL_FINDINGS_METADATA_RETENTION_SECONDS", "604800")),
+    1,
+)
 MAX_INVESTIGATIONS_PER_WORKLOAD = 100  # max concurrent
 MIN_STATUS_POLL_INTERVAL_SECONDS = int(os.environ.get("MIN_STATUS_POLL_INTERVAL_SECONDS", "5"))
 MAX_STATUS_POLLS_PER_INVESTIGATION = 288  # generous cap; long-polling means far fewer calls in practice
@@ -221,7 +225,7 @@ class InvestigationRegistry:
                 platform_thread_id="",
                 severity=severity,
                 created_at=now,
-                expires_at=now + INVESTIGATION_EXPIRY_SECONDS,
+                expires_at=now + ACTIVE_METADATA_RETENTION_SECONDS,
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
                 request_correlation_id=request_correlation_id or str(uuid.uuid4()),
@@ -256,8 +260,13 @@ class InvestigationRegistry:
             if not record or record.caller_appid != caller_appid:
                 raise ValueError("Investigation was not found")
             if record.reservation_state in {"reserved", "active"}:
+                completed_at = time.time()
                 record.reservation_state = terminal_state
-                record.completed_at = time.time()
+                record.completed_at = completed_at
+                record.expires_at = max(
+                    record.expires_at,
+                    completed_at + FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
+                )
 
     def record_findings_metadata(
         self,
@@ -271,7 +280,12 @@ class InvestigationRegistry:
             record = self._registry.get(investigation_id)
             if not record or record.caller_appid != caller_appid:
                 raise ValueError("Investigation was not found")
-            record.findings_finalized_at = time.time()
+            if record.findings_finalized_at == 0.0:
+                record.findings_finalized_at = time.time()
+                record.expires_at = max(
+                    record.expires_at,
+                    record.findings_finalized_at + FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
+                )
             record.findings_schema_version = "1.0" if schema_valid else ""
             record.findings_schema_valid = schema_valid
             record.findings_selection_strategy = selection_strategy
@@ -567,7 +581,7 @@ class TableStorageInvestigationRegistry:
             platform_thread_id="",
             severity=severity,
             created_at=now,
-            expires_at=now + INVESTIGATION_EXPIRY_SECONDS,
+            expires_at=now + ACTIVE_METADATA_RETENTION_SECONDS,
             idempotency_key=idempotency_key,
             request_correlation_id=request_correlation_id or str(uuid.uuid4()),
             request_fingerprint=request_fingerprint,
@@ -673,8 +687,13 @@ class TableStorageInvestigationRegistry:
 
             counter = self._get_or_create_quota_counter(caller_appid)
             updated_entity = dict(entity)
+            completed_at = time.time()
             updated_entity["reservation_state"] = terminal_state
-            updated_entity["completed_at"] = time.time()
+            updated_entity["completed_at"] = completed_at
+            updated_entity["expires_at"] = max(
+                float(entity.get("expires_at", 0.0)),
+                completed_at + FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
+            )
             updated_counter = dict(counter)
             updated_counter["active_count"] = max(0, int(counter.get("active_count", 0)) - 1)
             try:
@@ -720,7 +739,12 @@ class TableStorageInvestigationRegistry:
             if entity.get("caller_appid") != caller_appid:
                 raise ValueError("Investigation was not found")
             updated_entity = dict(entity)
-            updated_entity["findings_finalized_at"] = time.time()
+            if float(entity.get("findings_finalized_at", 0.0)) == 0.0:
+                updated_entity["findings_finalized_at"] = time.time()
+                updated_entity["expires_at"] = max(
+                    float(entity.get("expires_at", 0.0)),
+                    updated_entity["findings_finalized_at"] + FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
+                )
             updated_entity["findings_schema_version"] = "1.0" if schema_valid else ""
             updated_entity["findings_schema_valid"] = schema_valid
             updated_entity["findings_selection_strategy"] = selection_strategy

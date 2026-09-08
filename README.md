@@ -381,6 +381,8 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `MinReplicas` | No | `1` | Minimum Container App replicas. Use at least `2` for production. |
 | `MaxReplicas` | No | `5` | Maximum Container App replicas; must be at least `MinReplicas`. |
 | `LogRetentionDays` | No | `30` | Log Analytics retention in days (`30`-`730`). |
+| `ActiveMetadataRetentionDays` | No | `1` | Registry retention for reserved and active investigation metadata (`1`-`365`). |
+| `FinalFindingsMetadataRetentionDays` | No | `7` | Registry retention after terminal completion or first findings finalization (`1`-`365`); findings content is not persisted. |
 | `RegistryBackend` | No | `table` | Investigation registry backend: `table` or `memory`. |
 | `EnablePrivateNetworking` | No (switch) | Off | Enables VNet integration, Table private endpoint, and private DNS deployment. |
 | `PrivateNetworkName` | No | `<ProxyAppName>-vnet` when enabled | Name of the private proxy virtual network. |

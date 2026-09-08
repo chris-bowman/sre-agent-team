@@ -26,6 +26,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from main import (
+    ACTIVE_METADATA_RETENTION_SECONDS,
+    FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
     MAX_INVESTIGATION_CONTEXT_SIZE,
     MAX_INVESTIGATION_DESCRIPTION_SIZE,
     MAX_INVESTIGATIONS_PER_WORKLOAD,
@@ -169,6 +171,36 @@ def test_registry_detects_expired_investigation(registry):
 
     with pytest.raises(ValueError, match="has expired"):
         registry.get_investigation(inv_id, "oid1", "appid1")
+
+
+def test_registry_applies_active_and_finalized_metadata_retention(registry):
+    before_create = time.time()
+    inv_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+    record = registry._registry[inv_id]
+
+    assert record.expires_at >= before_create + ACTIVE_METADATA_RETENTION_SECONDS
+
+    before_completion = time.time()
+    registry.complete_investigation(inv_id, "appid1", "completed")
+    assert record.expires_at >= before_completion + FINAL_FINDINGS_METADATA_RETENTION_SECONDS
+
+    retained_after_completion = record.expires_at
+    registry.record_findings_metadata(inv_id, "appid1", True, "best_structured_message", False)
+    assert record.expires_at >= retained_after_completion
+
+    finalized_at = record.findings_finalized_at
+    retained_after_finalization = record.expires_at
+    with patch("main.time.time", return_value=finalized_at + 3600):
+        registry.record_findings_metadata(inv_id, "appid1", True, "best_structured_message", False)
+    assert record.findings_finalized_at == finalized_at
+    assert record.expires_at == retained_after_finalization
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -926,6 +958,36 @@ def test_table_completion_atomically_releases_quota_slot():
 
     assert registry._table.operations[0][1]["active_count"] == 0
     assert registry._table.operations[1][1]["reservation_state"] == "completed"
+    assert registry._table.operations[1][1]["expires_at"] >= time.time() + (
+        FINAL_FINDINGS_METADATA_RETENTION_SECONDS - 1
+    )
+
+
+def test_table_findings_metadata_applies_finalized_retention():
+    class FakeTable:
+        def __init__(self):
+            self.investigation = {
+                "PartitionKey": "appid1",
+                "RowKey": "investigation1",
+                "caller_appid": "appid1",
+                "expires_at": 100.0,
+                "etag": "investigation-etag",
+            }
+            self.updated = None
+
+        def get_entity(self, partition_key, row_key):
+            return self.investigation
+
+        def update_entity(self, entity, **kwargs):
+            self.updated = entity
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+
+    registry.record_findings_metadata("investigation1", "appid1", True, "best_structured_message", False)
+
+    assert registry._table.updated["findings_schema_version"] == "1.0"
+    assert registry._table.updated["expires_at"] >= time.time() + (FINAL_FINDINGS_METADATA_RETENTION_SECONDS - 1)
 
 
 def test_table_reservation_reconciles_stale_counter_before_rejecting():

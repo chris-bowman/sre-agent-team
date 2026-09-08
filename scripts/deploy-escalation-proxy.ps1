@@ -33,6 +33,8 @@ param (
     [ValidateRange(1, 100)] [int] $MinReplicas = 1,
     [ValidateRange(1, 100)] [int] $MaxReplicas = 5,
     [ValidateRange(30, 730)] [int] $LogRetentionDays = 30,
+    [ValidateRange(1, 365)] [int] $ActiveMetadataRetentionDays = 1,
+    [ValidateRange(1, 365)] [int] $FinalFindingsMetadataRetentionDays = 7,
     [ValidateSet('table', 'memory')] [string] $RegistryBackend = 'table',
     [switch] $EnablePrivateNetworking,
     [string] $PrivateNetworkName = '',
@@ -366,6 +368,8 @@ $deployOutputJson = az deployment group create `
         minReplicas=$MinReplicas `
         maxReplicas=$MaxReplicas `
         logRetentionDays=$LogRetentionDays `
+        activeMetadataRetentionDays=$ActiveMetadataRetentionDays `
+        finalFindingsMetadataRetentionDays=$FinalFindingsMetadataRetentionDays `
         "enablePrivateNetworking=$privateNetworkingValue" `
         privateNetworkName=$PrivateNetworkName `
         privateNetworkAddressPrefix=$PrivateNetworkAddressPrefix `

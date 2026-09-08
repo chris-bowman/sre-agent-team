@@ -110,6 +110,16 @@ param maxReplicas int = 5
 param logRetentionDays int = 30
 
 @minValue(1)
+@maxValue(365)
+@description('Retention in days for active investigation metadata.')
+param activeMetadataRetentionDays int = 1
+
+@minValue(1)
+@maxValue(365)
+@description('Retention in days for terminal investigation and finalized findings metadata. Findings content is not persisted.')
+param finalFindingsMetadataRetentionDays int = 7
+
+@minValue(1)
 @description('Number of exhausted Platform SRE Agent requests that opens the circuit breaker.')
 param platformCircuitFailureThreshold int = 5
 
@@ -388,6 +398,8 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'REGISTRY_BACKEND', value: registryBackend }
             { name: 'REGISTRY_TABLE_ENDPOINT', value: registryBackend == 'table' ? 'https://${registryStorage.name}.table.${environment().suffixes.storage}' : '' }
             { name: 'REGISTRY_TABLE_NAME', value: 'InvestigationRegistry' }
+            { name: 'ACTIVE_METADATA_RETENTION_SECONDS', value: string(activeMetadataRetentionDays * 86400) }
+            { name: 'FINAL_FINDINGS_METADATA_RETENTION_SECONDS', value: string(finalFindingsMetadataRetentionDays * 86400) }
             { name: 'MCP_ALLOWED_HOSTS', value: mcpAllowedHosts }
             { name: 'MCP_ENABLE_DNS_REBINDING_PROTECTION', value: mcpEnableDnsRebindingProtection }
             { name: 'PLATFORM_CIRCUIT_FAILURE_THRESHOLD', value: string(platformCircuitFailureThreshold) }

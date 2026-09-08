@@ -25,7 +25,19 @@ schema version and validity, summary-selection strategy, and whether redaction o
 
 The registry does not persist report bodies, credentials, bearer tokens, or other investigation
 evidence. Existing Table rows created before these metadata fields were introduced remain
-readable and use conservative defaults. Retention windows are defined separately under P4.4.
+readable and use conservative defaults.
+
+Retention is configured independently by data class:
+
+| Data class | Deployment setting | Default | Behavior |
+|---|---|---:|---|
+| Reserved and active investigation metadata | `ActiveMetadataRetentionDays` | 1 day | Set when the investigation is admitted; bounded cleanup removes expired rows and releases active quota slots. |
+| Terminal investigation and finalized findings metadata | `FinalFindingsMetadataRetentionDays` | 7 days | Applied at terminal completion or first findings finalization. Repeated summary reads do not extend retention. Findings content is never stored. |
+| Structured audit telemetry | `LogRetentionDays` | 30 days | Enforced by the Log Analytics workspace independently of registry cleanup. |
+
+Changing registry retention affects newly admitted or newly terminal investigations. Existing
+rows keep their persisted `expires_at` value. Retention settings must satisfy organizational
+privacy, incident-response, and audit requirements before production deployment.
 
 ## Monitoring and alerts
 

@@ -378,6 +378,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
               }
               initialDelaySeconds: 10
               periodSeconds: 30
+              timeoutSeconds: 5
             }
             {
               type: 'Readiness'
@@ -387,6 +388,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
               }
               initialDelaySeconds: 15
               periodSeconds: 30
+              timeoutSeconds: 5
             }
           ]
           env: [

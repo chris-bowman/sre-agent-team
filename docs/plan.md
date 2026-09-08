@@ -172,7 +172,7 @@ Do not start production networking or repository-wide terminology changes before
 
 - [x] P2.1 Extract configuration and shared domain models from `escalation-proxy/app/main.py`.
 - [x] P2.2 Extract token validation and caller-policy enforcement. `authorization.py` now owns JWKS signature verification, tenant and audience checks, app-only identity and role enforcement, authorization-header handling, severity-claim limits, and policy-backend construction. HTTP and MCP retain one configured authorization instance and existing compatibility aliases.
-- [ ] P2.3 Extract investigation lifecycle, registry, Platform SRE Agent client, output validation, and audit events.
+- [x] P2.3 Extract investigation lifecycle, registry, Platform SRE Agent client, output validation, and audit events. `investigation_service.py`, `investigation_registry.py`, `platform_client.py`, `output_validation.py`, and `telemetry.py` now own those concerns; `main.py` retains thin late-bound compatibility adapters shared by HTTP and MCP. The full suite passes with 92 tests, and Ruff format/lint, mypy, Bandit, compileall, and editor diagnostics are clean.
 - [x] P2.4 Route MCP and HTTP through the same existing domain implementation methods.
 - [x] P2.5 Replace the hand-written MCP dispatcher with the pinned official Python MCP SDK Streamable HTTP transport.
 - [x] P2.6 Carry the verified caller identity through dispatch without unverified token decoding.

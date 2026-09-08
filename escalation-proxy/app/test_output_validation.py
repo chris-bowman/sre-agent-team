@@ -1,0 +1,90 @@
+from unittest.mock import MagicMock
+
+from output_validation import (
+    is_finalized_summary,
+    normalize_status_value,
+    parse_finalized_findings,
+    redact_sensitive_text,
+    select_best_summary_text,
+    summary_candidate_score,
+)
+
+
+def test_redact_sensitive_text_masks_values_and_notifies_optional_sink():
+    event_sink = MagicMock()
+
+    result = redact_sensitive_text(
+        'password=supersecret {"client_secret": "json-secret"} https://example.test?sig=signed-value',
+        event_sink=event_sink,
+    )
+
+    assert "supersecret" not in result
+    assert "json-secret" not in result
+    assert "signed-value" not in result
+    assert result.count("[REDACTED]") == 3
+    event_sink.assert_called_once_with("findings_redacted")
+
+
+def test_redact_sensitive_text_does_not_notify_when_unchanged():
+    event_sink = MagicMock()
+
+    assert redact_sensitive_text("No credentials present.", event_sink=event_sink) == "No credentials present."
+    event_sink.assert_not_called()
+
+
+def test_normalize_status_value_preserves_existing_normalization():
+    assert normalize_status_value(None) == ""
+    assert normalize_status_value(" In_Progress ") == "inprogress"
+    assert normalize_status_value("TIMED-OUT") == "timedout"
+
+
+def test_summary_scoring_and_selection_prefer_finalized_report():
+    finalized = "Investigation complete.\nFINALIZATION_TOKEN: CUSTOM_FINAL"
+    progress = "A newer but non-final progress update."
+
+    assert summary_candidate_score(finalized, finalization_token="CUSTOM_FINAL") == 490
+    score, selected, strategy = select_best_summary_text(
+        [finalized, progress],
+        finalization_token="CUSTOM_FINAL",
+    )
+
+    assert score == 490
+    assert selected == finalized
+    assert strategy == "best_structured_message"
+
+
+def test_summary_selection_preserves_recent_composite_fallback():
+    messages = ["one", "two", "three", "four"]
+
+    assert select_best_summary_text(messages) == (-10, "two\n\n---\n\nthree\n\n---\n\nfour", "recent_composite")
+
+
+def test_finalized_summary_uses_explicit_token_requirement():
+    structured = "## Platform Investigation Findings\n### Root Cause\nA root cause"
+    score = summary_candidate_score(structured)
+
+    assert not is_finalized_summary(score, structured)
+    assert is_finalized_summary(score, structured, require_finalization_token=False)
+    assert is_finalized_summary(0, "CUSTOM_FINAL", finalization_token="CUSTOM_FINAL")
+
+
+def test_parse_finalized_findings_preserves_public_schema():
+    report = """## Platform Investigation Findings
+### Root Cause
+Route configuration changed.
+### Evidence
+- Route table no longer contains the approved route.
+### Recommended Actions
+1. Restore the approved route.
+### Verdict
+PLATFORM ISSUE
+FINALIZATION_TOKEN: CUSTOM_FINAL"""
+
+    assert parse_finalized_findings(report, finalization_token="CUSTOM_FINAL") == {
+        "summary": "Route configuration changed.",
+        "impact": "PLATFORM ISSUE",
+        "evidence": ["Route table no longer contains the approved route."],
+        "likely_causes": ["Route configuration changed."],
+        "recommended_actions": ["Restore the approved route."],
+        "limitations": ["Findings are investigation guidance; the proxy performed no remediation."],
+    }

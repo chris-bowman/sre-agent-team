@@ -8,7 +8,7 @@ ARG PIP_INDEX_URL
 RUN test -n "$PIP_INDEX_URL" \
 	&& pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements.txt
 
-COPY main.py authorization.py contracts.py caller_policy.py mcp_transport.py /app/
+COPY main.py authorization.py contracts.py caller_policy.py investigation_registry.py investigation_service.py mcp_transport.py output_validation.py platform_client.py telemetry.py /app/
 
 EXPOSE 8080
 

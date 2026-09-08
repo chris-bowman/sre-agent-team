@@ -547,8 +547,10 @@ async def test_platform_request_retries_transient_status_before_success():
     transient.request = MagicMock()
     success = MagicMock(status_code=200)
     success.raise_for_status = MagicMock()
-    with patch("main.httpx.AsyncClient.get", new_callable=AsyncMock, side_effect=[transient, success]) as get:
-        with patch("main.asyncio.sleep", new_callable=AsyncMock):
+    with patch(
+        "platform_client.httpx.AsyncClient.get", new_callable=AsyncMock, side_effect=[transient, success]
+    ) as get:
+        with patch("platform_client.asyncio.sleep", new_callable=AsyncMock):
             response = await _platform_request("GET", "/threads/thread-123", "platform-token")
 
     assert response is success
@@ -572,7 +574,7 @@ def test_platform_circuit_breaker_closes_after_successful_probe():
     breaker = PlatformCircuitBreaker(failure_threshold=1, recovery_seconds=1)
     breaker.record_failure()
 
-    with patch("main.time.monotonic", return_value=breaker._opened_at + 2):
+    with patch("platform_client.time.monotonic", return_value=breaker._opened_at + 2):
         breaker.before_request()
         breaker.record_success()
 
@@ -721,7 +723,12 @@ PLATFORM ISSUE
 FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
     platform_response = MagicMock(
         status_code=200,
-        json=lambda: {"value": [{"author": {"role": "SREAgent"}, "text": report}]},
+        json=lambda: {
+            "value": [
+                {"author": {"role": "SREAgent"}, "text": report},
+                {"author": {"role": "SREAgent"}, "text": "Newer progress update without final findings."},
+            ]
+        },
     )
 
     with (
@@ -733,6 +740,8 @@ FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
 
     record = registry.get_investigation(investigation_id, "oid1", "appid1")
     assert result["status"] == "completed"
+    assert "Route configuration changed." in result["summary"]
+    assert "Newer progress update" not in result["summary"]
     assert "secret-value" not in result["summary"]
     assert record.findings_schema_version == "1.0"
     assert record.findings_schema_valid

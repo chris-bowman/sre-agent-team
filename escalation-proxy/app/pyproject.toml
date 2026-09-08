@@ -10,7 +10,7 @@ line-ending = "lf"
 
 [tool.mypy]
 python_version = "3.12"
-files = ["authorization.py", "contracts.py", "caller_policy.py", "mcp_transport.py"]
+files = ["authorization.py", "contracts.py", "caller_policy.py", "investigation_registry.py", "investigation_service.py", "mcp_transport.py", "output_validation.py", "platform_client.py", "telemetry.py"]
 ignore_missing_imports = true
 follow_imports = "skip"
 warn_unused_configs = true

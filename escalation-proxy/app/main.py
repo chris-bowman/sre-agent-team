@@ -43,7 +43,6 @@ from threading import Lock
 from typing import Any
 
 import httpx
-import jwt  # PyJWT
 from azure.core import MatchConditions
 from azure.core.credentials import AccessToken
 from azure.core.exceptions import ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
@@ -53,7 +52,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from caller_policy import CallerPolicyStore, RefreshingCallerPolicyStore
+from authorization import CallerAuthorization, CallerIdentity, build_caller_policy_store
 from contracts import (
     CreateInvestigationRequest,
     CreateInvestigationV1Request,
@@ -130,7 +129,6 @@ PLATFORM_REQUEST_MAX_ATTEMPTS = int(os.environ.get("PLATFORM_REQUEST_MAX_ATTEMPT
 PLATFORM_CIRCUIT_FAILURE_THRESHOLD = max(int(os.environ.get("PLATFORM_CIRCUIT_FAILURE_THRESHOLD", "5")), 1)
 PLATFORM_CIRCUIT_RECOVERY_SECONDS = max(float(os.environ.get("PLATFORM_CIRCUIT_RECOVERY_SECONDS", "30")), 1.0)
 ALLOWED_SEVERITY_LEVELS = {"low", "medium", "high", "critical"}
-SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 SEVERITY_CLAIM = os.environ.get("SEVERITY_CLAIM", "max_escalation_severity")
 REQUIRE_SEVERITY_CLAIM = os.environ.get("REQUIRE_SEVERITY_CLAIM", "false").strip().lower() in ("1", "true", "yes", "on")
 
@@ -919,19 +917,26 @@ def log_event(event: str, **fields: Any) -> None:
 
 
 _investigation_registry = build_investigation_registry()
-_caller_policy_store = (
-    RefreshingCallerPolicyStore(
-        endpoint=APP_CONFIG_ENDPOINT,
-        key=CALLER_POLICY_KEY,
-        label=CALLER_POLICY_LABEL,
-        default_quota=MAX_INVESTIGATIONS_PER_WORKLOAD,
-        refresh_interval_seconds=CALLER_POLICY_REFRESH_SECONDS,
-        maximum_staleness_seconds=CALLER_POLICY_MAX_STALENESS_SECONDS,
-        event_sink=log_event,
-    )
-    if APP_CONFIG_ENDPOINT
-    else CallerPolicyStore.from_json(CALLER_POLICIES_JSON, MAX_INVESTIGATIONS_PER_WORKLOAD)
+_caller_policy_store = build_caller_policy_store(
+    app_configuration_endpoint=APP_CONFIG_ENDPOINT,
+    key=CALLER_POLICY_KEY,
+    label=CALLER_POLICY_LABEL,
+    fallback_json=CALLER_POLICIES_JSON,
+    default_quota=MAX_INVESTIGATIONS_PER_WORKLOAD,
+    refresh_interval_seconds=CALLER_POLICY_REFRESH_SECONDS,
+    maximum_staleness_seconds=CALLER_POLICY_MAX_STALENESS_SECONDS,
+    event_sink=log_event,
 )
+_caller_authorization = CallerAuthorization(
+    tenant_id=ENTRA_TENANT_ID,
+    client_id=ENTRA_CLIENT_ID,
+    severity_claim=SEVERITY_CLAIM,
+    require_severity_claim=REQUIRE_SEVERITY_CLAIM,
+    event_sink=log_event,
+)
+validate_caller_token = _caller_authorization.validate_caller_token
+validate_requested_severity = _caller_authorization.validate_requested_severity
+extract_and_validate_token = _caller_authorization.extract_and_validate_token
 
 
 class PlatformCircuitBreaker:
@@ -1033,76 +1038,6 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
     raise HTTPException(status_code=503, detail="Platform SRE Agent is temporarily unavailable") from last_error
 
 
-# ── Caller token validation ───────────────────────────────────────────────────
-JWKS_URI = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}/discovery/v2.0/keys"
-_jwks_client = jwt.PyJWKClient(JWKS_URI, cache_keys=True)
-
-
-def validate_caller_token(bearer_token: str) -> dict:
-    """
-    Validate the caller's Entra token.
-    Raises ValueError if invalid or missing EscalationCaller role.
-    """
-    try:
-        signing_key = _jwks_client.get_signing_key_from_jwt(bearer_token)
-        payload = jwt.decode(
-            bearer_token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=[ENTRA_CLIENT_ID, f"api://{ENTRA_CLIENT_ID}"],
-            issuer=f"https://sts.windows.net/{ENTRA_TENANT_ID}/",
-        )
-    except jwt.ExpiredSignatureError:
-        raise ValueError("Token has expired")
-    except jwt.InvalidTokenError as e:
-        raise ValueError(f"Invalid token: {e}")
-
-    # Check for the EscalationCaller app role
-    roles = payload.get("roles", [])
-    if "EscalationCaller" not in roles:
-        log_event(
-            "caller_token_missing_role",
-            appid=payload.get("appid"),
-            oid=payload.get("oid"),
-            azp=payload.get("azp"),
-            audience=payload.get("aud"),
-            roles=roles if isinstance(roles, list) else [],
-            # exp/iat are not secrets; logging them lets us tell when a stale
-            # cached token (e.g. from an MI broker) will naturally expire.
-            issued_at=payload.get("iat"),
-            expires_at=payload.get("exp"),
-        )
-        raise ValueError("Caller does not have the EscalationCaller app role")
-
-    # Validate required identity claims for the caller service principal.
-    if not payload.get("appid"):
-        raise ValueError("Token missing appid claim")
-    if not payload.get("oid"):
-        raise ValueError("Token missing oid claim")
-
-    return payload
-
-
-def validate_requested_severity(severity: str, claims: dict) -> str:
-    """Validate severity syntax and enforce an optional token claim ceiling."""
-    normalized = (severity or "").strip().lower()
-    if normalized not in ALLOWED_SEVERITY_LEVELS:
-        raise ValueError(f"severity must be one of {sorted(ALLOWED_SEVERITY_LEVELS)}")
-
-    claim_value = claims.get(SEVERITY_CLAIM)
-    if claim_value is None:
-        if REQUIRE_SEVERITY_CLAIM:
-            raise ValueError(f"Token missing {SEVERITY_CLAIM} claim")
-        return normalized
-
-    if not isinstance(claim_value, str) or claim_value.strip().lower() not in ALLOWED_SEVERITY_LEVELS:
-        raise ValueError(f"Token claim {SEVERITY_CLAIM} is invalid")
-    maximum = claim_value.strip().lower()
-    if SEVERITY_ORDER[normalized] > SEVERITY_ORDER[maximum]:
-        raise ValueError(f"Requested severity exceeds token limit ({maximum})")
-    return normalized
-
-
 def redact_sensitive_text(text: str) -> str:
     """Remove credential-shaped values before returning platform output."""
     original = text or ""
@@ -1164,49 +1099,11 @@ async def versioned_problem_details(request: Request, exc: HTTPException):
     )
 
 
-class CallerIdentity:
-    """Extracted and validated caller identity from token."""
-
-    def __init__(self, payload: dict):
-        self.claims = payload
-        self.oid = payload.get("oid")  # Azure AD object ID (for audit)
-        self.appid = payload.get("appid")  # Service principal application ID (for authorization)
-        self.roles = payload.get("roles", [])
-
-
 class McpRequest(BaseModel):
     jsonrpc: str
     id: Any = None
     method: str
     params: dict[str, Any] = {}
-
-
-# ── Helper to extract and validate Bearer token ──────────────────────────────
-def extract_and_validate_token(authorization: str = None) -> tuple[str, CallerIdentity]:
-    """Extract Bearer token from Authorization header, validate it, and return token + caller identity."""
-    if not authorization:
-        log_event("caller_authorization_denied", outcome="denied", reason="missing_authorization_header")
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    if not authorization.startswith("Bearer "):
-        log_event("caller_authorization_denied", outcome="denied", reason="invalid_authorization_format")
-        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
-    token = authorization.removeprefix("Bearer ").strip()
-    try:
-        payload = validate_caller_token(token)
-    except ValueError as exc:
-        log_event("caller_authorization_denied", outcome="denied", reason="token_validation_failed")
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-    caller = CallerIdentity(payload)
-    log_event(
-        "caller_token_validated",
-        outcome="authorized",
-        appid=caller.appid,
-        azp=payload.get("azp"),
-        oid=caller.oid,
-        roles=caller.roles,
-    )
-    return token, caller
 
 
 def _mcp_result(request_id: Any, result: Any) -> dict[str, Any]:

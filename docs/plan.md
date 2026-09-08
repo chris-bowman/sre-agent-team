@@ -171,7 +171,7 @@ Do not start production networking or repository-wide terminology changes before
 **Goal:** Make MCP portable while preventing authorization drift between transports.
 
 - [x] P2.1 Extract configuration and shared domain models from `escalation-proxy/app/main.py`.
-- [ ] P2.2 Extract token validation and caller-policy enforcement.
+- [x] P2.2 Extract token validation and caller-policy enforcement. `authorization.py` now owns JWKS signature verification, tenant and audience checks, app-only identity and role enforcement, authorization-header handling, severity-claim limits, and policy-backend construction. HTTP and MCP retain one configured authorization instance and existing compatibility aliases.
 - [ ] P2.3 Extract investigation lifecycle, registry, Platform SRE Agent client, output validation, and audit events.
 - [x] P2.4 Route MCP and HTTP through the same existing domain implementation methods.
 - [x] P2.5 Replace the hand-written MCP dispatcher with the pinned official Python MCP SDK Streamable HTTP transport.

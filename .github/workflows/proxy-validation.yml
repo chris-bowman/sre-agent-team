@@ -83,11 +83,11 @@ jobs:
       - name: Type-check extracted modules
         run: python -m mypy
       - name: Scan source for security issues
-        run: python -m bandit --quiet --recursive --severity-level medium main.py contracts.py caller_policy.py mcp_transport.py
+        run: python -m bandit --quiet --recursive --severity-level medium main.py authorization.py contracts.py caller_policy.py mcp_transport.py
       - name: Audit runtime dependencies
         run: python -m pip_audit -r requirements.txt --progress-spinner off
       - name: Compile proxy modules
-        run: python -m compileall -q main.py contracts.py caller_policy.py mcp_transport.py
+        run: python -m compileall -q main.py authorization.py contracts.py caller_policy.py mcp_transport.py
       - name: Run proxy tests
         run: python -m pytest -q
 

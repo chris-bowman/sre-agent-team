@@ -903,6 +903,9 @@ def test_table_reservation_submits_counter_and_reservation_transaction():
         def list_entities(self):
             return []
 
+        def query_entities(self, query_filter):
+            return []
+
         def get_entity(self, partition_key, row_key):
             assert partition_key == "appid1"
             assert row_key == "__quota_counter__"

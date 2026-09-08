@@ -35,6 +35,7 @@ param (
     [ValidateRange(30, 730)] [int] $LogRetentionDays = 30,
     [ValidateRange(1, 365)] [int] $ActiveMetadataRetentionDays = 1,
     [ValidateRange(1, 365)] [int] $FinalFindingsMetadataRetentionDays = 7,
+    [ValidateRange(1, 86400)] [int] $ExpiryCleanupIntervalSeconds = 300,
     [ValidateSet('table', 'memory')] [string] $RegistryBackend = 'table',
     [switch] $EnablePrivateNetworking,
     [string] $PrivateNetworkName = '',
@@ -370,6 +371,7 @@ $deployOutputJson = az deployment group create `
         logRetentionDays=$LogRetentionDays `
         activeMetadataRetentionDays=$ActiveMetadataRetentionDays `
         finalFindingsMetadataRetentionDays=$FinalFindingsMetadataRetentionDays `
+        expiryCleanupIntervalSeconds=$ExpiryCleanupIntervalSeconds `
         "enablePrivateNetworking=$privateNetworkingValue" `
         privateNetworkName=$PrivateNetworkName `
         privateNetworkAddressPrefix=$PrivateNetworkAddressPrefix `

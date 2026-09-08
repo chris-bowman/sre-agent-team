@@ -383,6 +383,7 @@ The tables below document every parameter accepted by the deployment scripts in 
 | `LogRetentionDays` | No | `30` | Log Analytics retention in days (`30`-`730`). |
 | `ActiveMetadataRetentionDays` | No | `1` | Registry retention for reserved and active investigation metadata (`1`-`365`). |
 | `FinalFindingsMetadataRetentionDays` | No | `7` | Registry retention after terminal completion or first findings finalization (`1`-`365`); findings content is not persisted. |
+| `ExpiryCleanupIntervalSeconds` | No | `300` | Interval between bounded expiry cleanup sweeps run inside each proxy replica (`1`-`86400`). |
 | `RegistryBackend` | No | `table` | Investigation registry backend: `table` or `memory`. |
 | `EnablePrivateNetworking` | No (switch) | Off | Enables VNet integration, Table private endpoint, and private DNS deployment. |
 | `PrivateNetworkName` | No | `<ProxyAppName>-vnet` when enabled | Name of the private proxy virtual network. |

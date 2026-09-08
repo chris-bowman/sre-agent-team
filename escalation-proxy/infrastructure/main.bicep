@@ -120,6 +120,11 @@ param activeMetadataRetentionDays int = 1
 param finalFindingsMetadataRetentionDays int = 7
 
 @minValue(1)
+@maxValue(86400)
+@description('Seconds between bounded investigation registry expiry cleanup sweeps in each proxy replica.')
+param expiryCleanupIntervalSeconds int = 300
+
+@minValue(1)
 @description('Number of exhausted Platform SRE Agent requests that opens the circuit breaker.')
 param platformCircuitFailureThreshold int = 5
 
@@ -400,6 +405,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'REGISTRY_TABLE_NAME', value: 'InvestigationRegistry' }
             { name: 'ACTIVE_METADATA_RETENTION_SECONDS', value: string(activeMetadataRetentionDays * 86400) }
             { name: 'FINAL_FINDINGS_METADATA_RETENTION_SECONDS', value: string(finalFindingsMetadataRetentionDays * 86400) }
+            { name: 'EXPIRY_CLEANUP_INTERVAL_SECONDS', value: string(expiryCleanupIntervalSeconds) }
             { name: 'MCP_ALLOWED_HOSTS', value: mcpAllowedHosts }
             { name: 'MCP_ENABLE_DNS_REBINDING_PROTECTION', value: mcpEnableDnsRebindingProtection }
             { name: 'PLATFORM_CIRCUIT_FAILURE_THRESHOLD', value: string(platformCircuitFailureThreshold) }

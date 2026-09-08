@@ -12,6 +12,7 @@ Covers:
   - Rate limiting and expiry
 """
 
+import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import jwt as pyjwt
 import pytest
+from azure.core.exceptions import ResourceNotFoundError
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from mcp import ClientSession
@@ -27,7 +29,9 @@ from mcp.client.streamable_http import streamable_http_client
 
 from main import (
     ACTIVE_METADATA_RETENTION_SECONDS,
+    EXPIRY_CLEANUP_INTERVAL_SECONDS,
     FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
+    MAX_EXPIRY_CLEANUP_BATCH_SIZE,
     MAX_INVESTIGATION_CONTEXT_SIZE,
     MAX_INVESTIGATION_DESCRIPTION_SIZE,
     MAX_INVESTIGATIONS_PER_WORKLOAD,
@@ -45,8 +49,10 @@ from main import (
     _get_status_impl,
     _get_summary_impl,
     _platform_request,
+    _run_expiry_cleanup,
     app,
     log_event,
+    mcp_lifespan,
     redact_sensitive_text,
     validate_requested_severity,
 )
@@ -1044,7 +1050,7 @@ def test_table_reservation_reconciles_stale_counter_before_rejecting():
 
 def test_table_cleanup_skips_quota_counter_without_caller_appid():
     class FakeTable:
-        def list_entities(self):
+        def query_entities(self, query_filter, **kwargs):
             return [
                 {
                     "PartitionKey": "appid1",
@@ -1060,6 +1066,91 @@ def test_table_cleanup_skips_quota_counter_without_caller_appid():
     registry._table = FakeTable()
 
     assert registry.cleanup_expired() == 0
+
+
+def test_table_cleanup_ignores_entity_deleted_by_another_replica():
+    class FakeTable:
+        def query_entities(self, query_filter):
+            return [
+                {
+                    "PartitionKey": "appid1",
+                    "RowKey": "investigation1",
+                    "caller_appid": "appid1",
+                    "reservation_state": "active",
+                    "expires_at": time.time() - 1,
+                }
+            ]
+
+        def delete_entity(self, partition_key, row_key):
+            raise ResourceNotFoundError("already deleted")
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+    registry._decrement_quota_counter = MagicMock()
+
+    assert registry.cleanup_expired() == 0
+    registry._decrement_quota_counter.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_expiry_cleanup_worker_runs_immediately_then_waits():
+    registry = MagicMock()
+    registry.cleanup_expired.return_value = 2
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main.log_event") as event,
+        patch("main.asyncio.sleep", new_callable=AsyncMock, side_effect=asyncio.CancelledError) as sleep,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await _run_expiry_cleanup()
+
+    registry.cleanup_expired.assert_called_once_with(MAX_EXPIRY_CLEANUP_BATCH_SIZE)
+    event.assert_called_once_with("expiry_cleanup_completed", count=2)
+    sleep.assert_awaited_once_with(EXPIRY_CLEANUP_INTERVAL_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_expiry_cleanup_worker_continues_after_failure():
+    registry = MagicMock()
+    registry.cleanup_expired.side_effect = [RuntimeError("storage unavailable"), 0]
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main.log_event") as event,
+        patch("main.asyncio.sleep", new_callable=AsyncMock, side_effect=[None, asyncio.CancelledError]),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await _run_expiry_cleanup()
+
+    assert registry.cleanup_expired.call_count == 2
+    event.assert_called_once_with("expiry_cleanup_failed", error_type="RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_mcp_lifespan_starts_and_stops_cleanup_worker():
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def worker():
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    @asynccontextmanager
+    async def session_manager():
+        yield
+
+    with (
+        patch("main._run_expiry_cleanup", worker),
+        patch("main.mcp_transport.server.session_manager.run", return_value=session_manager()),
+    ):
+        async with mcp_lifespan(None):
+            await asyncio.wait_for(started.wait(), timeout=1)
+
+    assert stopped.is_set()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -35,7 +35,7 @@ import random
 import re
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import islice
@@ -107,6 +107,7 @@ MAX_INVESTIGATION_CONTEXT_SIZE = 10000  # characters
 MAX_WORKLOAD_NAME_SIZE = 256  # characters
 MAX_IDEMPOTENCY_KEY_SIZE = 128
 MAX_EXPIRY_CLEANUP_BATCH_SIZE = int(os.environ.get("MAX_EXPIRY_CLEANUP_BATCH_SIZE", "100"))
+EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
 ACTIVE_METADATA_RETENTION_SECONDS = max(int(os.environ.get("ACTIVE_METADATA_RETENTION_SECONDS", "86400")), 1)
 FINAL_FINDINGS_METADATA_RETENTION_SECONDS = max(
     int(os.environ.get("FINAL_FINDINGS_METADATA_RETENTION_SECONDS", "604800")),
@@ -877,14 +878,22 @@ class TableStorageInvestigationRegistry:
         now = time.time()
         expired = [
             entity
-            for entity in islice(self._table.list_entities(), limit)
+            for entity in islice(
+                self._table.query_entities(query_filter=f"expires_at lt {now}"),
+                limit,
+            )
             if entity.get("RowKey") != self._quota_counter_key() and float(entity.get("expires_at", 0)) < now
         ]
+        deleted_count = 0
         for entity in expired:
-            self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
+            try:
+                self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
+            except ResourceNotFoundError:
+                continue
+            deleted_count += 1
             if entity.get("reservation_state", "active") in {"reserved", "active"} and entity.get("caller_appid"):
                 self._decrement_quota_counter(entity["caller_appid"])
-        return len(expired)
+        return deleted_count
 
     def health_check(self) -> None:
         """Perform a bounded data-plane query to verify table access."""
@@ -1877,10 +1886,33 @@ mcp_transport = create_mcp_app()
 app.mount("/mcp", mcp_transport)
 
 
+async def _run_expiry_cleanup() -> None:
+    while True:
+        try:
+            count = await asyncio.to_thread(
+                _investigation_registry.cleanup_expired,
+                MAX_EXPIRY_CLEANUP_BATCH_SIZE,
+            )
+            if count > 0:
+                log_event("expiry_cleanup_completed", count=count)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Investigation registry cleanup failed")
+            log_event("expiry_cleanup_failed", error_type=type(exc).__name__)
+        await asyncio.sleep(EXPIRY_CLEANUP_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def mcp_lifespan(_application):
-    async with mcp_transport.server.session_manager.run():
-        yield
+    cleanup_task = asyncio.create_task(_run_expiry_cleanup())
+    try:
+        async with mcp_transport.server.session_manager.run():
+            yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
 
 
 app.router.lifespan_context = mcp_lifespan
@@ -2006,20 +2038,6 @@ async def get_summary(
     response.headers["Link"] = '</api/v1/investigations/{investigation_id}/findings>; rel="successor-version"'
     _token, caller = extract_and_validate_token(authorization)
     return await _get_summary_impl(req, caller)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Clean up expired investigations on startup."""
-    try:
-        count = _investigation_registry.cleanup_expired()
-        if count > 0:
-            log_event("startup_cleanup_expired_investigations", count=count)
-    except Exception as exc:
-        # Registry cleanup is maintenance; it must not prevent health checks
-        # while storage RBAC or networking is propagating.
-        logger.exception("Investigation registry cleanup failed")
-        log_event("startup_cleanup_failed", error_type=type(exc).__name__)
 
 
 if __name__ == "__main__":

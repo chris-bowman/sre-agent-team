@@ -35,6 +35,13 @@ Retention is configured independently by data class:
 | Terminal investigation and finalized findings metadata | `FinalFindingsMetadataRetentionDays` | 7 days | Applied at terminal completion or first findings finalization. Repeated summary reads do not extend retention. Findings content is never stored. |
 | Structured audit telemetry | `LogRetentionDays` | 30 days | Enforced by the Log Analytics workspace independently of registry cleanup. |
 
+The proxy runs a bounded registry cleanup sweep immediately when each container replica starts
+and every `ExpiryCleanupIntervalSeconds` thereafter (default 300 seconds). Cleanup calls the
+configured registry abstraction, so the same lifecycle applies to Table Storage, local memory,
+and future backends. `expires_at` does not cause Azure Table Storage to delete an entity by itself.
+With multiple replicas, concurrent sweeps are safe: a replica treats an entity already deleted by
+another replica as complete and only releases quota after its own successful deletion.
+
 Changing registry retention affects newly admitted or newly terminal investigations. Existing
 rows keep their persisted `expires_at` value. Retention settings must satisfy organizational
 privacy, incident-response, and audit requirements before production deployment.

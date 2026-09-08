@@ -209,7 +209,7 @@ Do not start production networking or repository-wide terminology changes before
 
 - [x] P4.1 Extend registry records with idempotency, caller-policy snapshot, lifecycle timestamps, and structured-findings metadata. Both memory and Table backends now retain the policy values used at admission, activation/completion/finalization timestamps, and safe findings schema, selection, and redaction metadata without persisting report content. Older Table rows deserialize with conservative defaults.
 - [x] P4.2 Make quota check and creation atomic using conditional writes, transactions, or a per-caller counter record.
-- [x] P4.3 Add bounded continuous expiry cleanup without full-table startup scans.
+- [x] P4.3 Add bounded continuous expiry cleanup without full-table startup scans. Each proxy replica now runs an immediate and periodic backend-neutral cleanup worker, with a configurable interval, bounded batches, transient-failure recovery, clean shutdown, and idempotent Table deletion under replica races.
 - [x] P4.4 Define separate retention settings for active metadata, final findings, and audit telemetry. Active registry metadata defaults to 1 day, terminal and finalized-findings metadata defaults to 7 days without storing findings content, and Log Analytics audit telemetry remains independently configurable at 30 days. Repeated summary reads do not extend registry retention.
 - [x] P4.5 Restrict memory mode to local development and one replica.
 - [x] P4.6 Add separate liveness and dependency-aware readiness endpoints.

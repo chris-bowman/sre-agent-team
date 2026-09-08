@@ -161,6 +161,17 @@ class InvestigationRecord:
     idempotency_key: str = ""
     request_fingerprint: str = ""
     reservation_state: str = "active"
+    policy_display_name: str = ""
+    policy_enabled: bool = True
+    policy_maximum_severity: str = ""
+    policy_maximum_concurrent_investigations: int = 0
+    activated_at: float = 0.0
+    completed_at: float = 0.0
+    findings_finalized_at: float = 0.0
+    findings_schema_version: str = ""
+    findings_schema_valid: bool = False
+    findings_selection_strategy: str = ""
+    findings_redacted: bool = False
 
 
 class InvestigationRegistry:
@@ -182,6 +193,9 @@ class InvestigationRegistry:
         idempotency_key: str = "",
         request_fingerprint: str = "",
         request_correlation_id: str = "",
+        policy_display_name: str = "",
+        policy_enabled: bool = True,
+        policy_maximum_severity: str = "",
     ) -> str:
         """Atomically reserve one caller quota slot before creating a platform thread."""
         with self._lock:
@@ -212,6 +226,10 @@ class InvestigationRegistry:
                 request_fingerprint=request_fingerprint,
                 request_correlation_id=request_correlation_id or str(uuid.uuid4()),
                 reservation_state="reserved",
+                policy_display_name=policy_display_name,
+                policy_enabled=policy_enabled,
+                policy_maximum_severity=policy_maximum_severity,
+                policy_maximum_concurrent_investigations=maximum_investigations,
             )
             self._registry[investigation_id] = record
             self._workload_investigations.setdefault(workload_name, []).append(investigation_id)
@@ -224,6 +242,7 @@ class InvestigationRegistry:
                 raise ValueError("Investigation reservation was not found")
             record.platform_thread_id = platform_thread_id
             record.reservation_state = "active"
+            record.activated_at = time.time()
 
     def release_reservation(self, investigation_id: str, caller_appid: str) -> None:
         with self._lock:
@@ -238,6 +257,25 @@ class InvestigationRegistry:
                 raise ValueError("Investigation was not found")
             if record.reservation_state in {"reserved", "active"}:
                 record.reservation_state = terminal_state
+                record.completed_at = time.time()
+
+    def record_findings_metadata(
+        self,
+        investigation_id: str,
+        caller_appid: str,
+        schema_valid: bool,
+        selection_strategy: str,
+        redaction_applied: bool,
+    ) -> None:
+        with self._lock:
+            record = self._registry.get(investigation_id)
+            if not record or record.caller_appid != caller_appid:
+                raise ValueError("Investigation was not found")
+            record.findings_finalized_at = time.time()
+            record.findings_schema_version = "1.0" if schema_valid else ""
+            record.findings_schema_valid = schema_valid
+            record.findings_selection_strategy = selection_strategy
+            record.findings_redacted = redaction_applied
 
     def create_investigation(
         self,
@@ -458,6 +496,17 @@ class TableStorageInvestigationRegistry:
             "idempotency_key": record.idempotency_key,
             "request_fingerprint": record.request_fingerprint,
             "reservation_state": record.reservation_state,
+            "policy_display_name": record.policy_display_name,
+            "policy_enabled": record.policy_enabled,
+            "policy_maximum_severity": record.policy_maximum_severity,
+            "policy_maximum_concurrent_investigations": record.policy_maximum_concurrent_investigations,
+            "activated_at": record.activated_at,
+            "completed_at": record.completed_at,
+            "findings_finalized_at": record.findings_finalized_at,
+            "findings_schema_version": record.findings_schema_version,
+            "findings_schema_valid": record.findings_schema_valid,
+            "findings_selection_strategy": record.findings_selection_strategy,
+            "findings_redacted": record.findings_redacted,
         }
 
     @staticmethod
@@ -478,6 +527,17 @@ class TableStorageInvestigationRegistry:
             idempotency_key=entity.get("idempotency_key", ""),
             request_fingerprint=entity.get("request_fingerprint", ""),
             reservation_state=entity.get("reservation_state", "active"),
+            policy_display_name=entity.get("policy_display_name", ""),
+            policy_enabled=bool(entity.get("policy_enabled", True)),
+            policy_maximum_severity=entity.get("policy_maximum_severity", ""),
+            policy_maximum_concurrent_investigations=int(entity.get("policy_maximum_concurrent_investigations", 0)),
+            activated_at=float(entity.get("activated_at", 0.0)),
+            completed_at=float(entity.get("completed_at", 0.0)),
+            findings_finalized_at=float(entity.get("findings_finalized_at", 0.0)),
+            findings_schema_version=entity.get("findings_schema_version", ""),
+            findings_schema_valid=bool(entity.get("findings_schema_valid", False)),
+            findings_selection_strategy=entity.get("findings_selection_strategy", ""),
+            findings_redacted=bool(entity.get("findings_redacted", False)),
         )
 
     def reserve_investigation(
@@ -491,6 +551,9 @@ class TableStorageInvestigationRegistry:
         idempotency_key: str = "",
         request_fingerprint: str = "",
         request_correlation_id: str = "",
+        policy_display_name: str = "",
+        policy_enabled: bool = True,
+        policy_maximum_severity: str = "",
     ) -> str:
         """Atomically reserve a Table slot and increment its per-caller quota counter."""
         self.cleanup_expired(MAX_EXPIRY_CLEANUP_BATCH_SIZE)
@@ -509,6 +572,10 @@ class TableStorageInvestigationRegistry:
             request_correlation_id=request_correlation_id or str(uuid.uuid4()),
             request_fingerprint=request_fingerprint,
             reservation_state="reserved",
+            policy_display_name=policy_display_name,
+            policy_enabled=policy_enabled,
+            policy_maximum_severity=policy_maximum_severity,
+            policy_maximum_concurrent_investigations=maximum_investigations,
         )
         for _attempt in range(3):
             counter = self._get_or_create_quota_counter(workload_identity_appid)
@@ -558,6 +625,7 @@ class TableStorageInvestigationRegistry:
                 raise ValueError("Investigation reservation was not found")
             record.platform_thread_id = platform_thread_id
             record.reservation_state = "active"
+            record.activated_at = time.time()
             try:
                 self._table.update_entity(
                     self._to_entity(record),
@@ -606,6 +674,7 @@ class TableStorageInvestigationRegistry:
             counter = self._get_or_create_quota_counter(caller_appid)
             updated_entity = dict(entity)
             updated_entity["reservation_state"] = terminal_state
+            updated_entity["completed_at"] = time.time()
             updated_counter = dict(counter)
             updated_counter["active_count"] = max(0, int(counter.get("active_count", 0)) - 1)
             try:
@@ -637,6 +706,38 @@ class TableStorageInvestigationRegistry:
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Investigation completion update conflicted; please retry")
+
+    def record_findings_metadata(
+        self,
+        investigation_id: str,
+        caller_appid: str,
+        schema_valid: bool,
+        selection_strategy: str,
+        redaction_applied: bool,
+    ) -> None:
+        for _attempt in range(3):
+            entity = self._table.get_entity(self._partition_key(caller_appid), investigation_id)
+            if entity.get("caller_appid") != caller_appid:
+                raise ValueError("Investigation was not found")
+            updated_entity = dict(entity)
+            updated_entity["findings_finalized_at"] = time.time()
+            updated_entity["findings_schema_version"] = "1.0" if schema_valid else ""
+            updated_entity["findings_schema_valid"] = schema_valid
+            updated_entity["findings_selection_strategy"] = selection_strategy
+            updated_entity["findings_redacted"] = redaction_applied
+            try:
+                self._table.update_entity(
+                    updated_entity,
+                    mode=UpdateMode.REPLACE,
+                    etag=self._entity_etag(entity),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                return
+            except ResourceModifiedError:
+                log_event("table_investigation_conflict", operation="findings_metadata", attempt=_attempt + 1)
+                time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
+                continue
+        raise ValueError("Investigation findings update conflicted; please retry")
 
     def create_investigation(
         self,
@@ -1345,6 +1446,9 @@ async def _create_investigation_impl(
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
             request_correlation_id=correlation_id,
+            policy_display_name=caller_policy.display_name,
+            policy_enabled=caller_policy.enabled,
+            policy_maximum_severity=caller_policy.maximum_severity,
         )
     except ValueError as e:
         log_event(
@@ -1549,7 +1653,9 @@ async def _get_summary_impl(req: GetInvestigationRequest, caller: CallerIdentity
         best_score, rca, selection_strategy = _select_best_summary_text(agent_texts)
         status = "completed" if _is_finalized_summary(best_score, rca) else "running"
 
+    unredacted_rca = rca
     rca = redact_sensitive_text(rca)
+    redaction_applied = rca != unredacted_rca
 
     log_event(
         "platform_thread_summary_retrieved",
@@ -1563,11 +1669,22 @@ async def _get_summary_impl(req: GetInvestigationRequest, caller: CallerIdentity
     )
     if status == "completed":
         _investigation_registry.complete_investigation(req.investigation_id, caller.appid, status)
+        findings_schema_valid = _parse_finalized_findings(rca) is not None
+        _investigation_registry.record_findings_metadata(
+            req.investigation_id,
+            caller.appid,
+            findings_schema_valid,
+            selection_strategy,
+            redaction_applied,
+        )
         log_event(
             "investigation_terminal",
             outcome=status,
             investigation_id=req.investigation_id,
             caller_appid=caller.appid,
+            findings_schema_valid=findings_schema_valid,
+            findings_selection_strategy=selection_strategy,
+            findings_redacted=redaction_applied,
         )
     return RedactedSummaryResponse(
         investigation_id=req.investigation_id,

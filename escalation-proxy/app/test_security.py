@@ -599,7 +599,9 @@ async def test_terminal_status_releases_quota_slot(registry):
         result = await _get_status_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
 
     assert result["status"] == "completed"
-    assert registry.get_investigation(investigation_id, "oid1", "appid1").reservation_state == "completed"
+    completed = registry.get_investigation(investigation_id, "oid1", "appid1")
+    assert completed.reservation_state == "completed"
+    assert completed.completed_at > 0
     registry.reserve_investigation(
         caller_oid="oid1",
         caller_appid="appid1",
@@ -641,7 +643,13 @@ async def test_finalized_summary_releases_quota_slot(registry):
         result = await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
 
     assert result["status"] == "completed"
-    assert registry.get_investigation(investigation_id, "oid1", "appid1").reservation_state == "completed"
+    completed = registry.get_investigation(investigation_id, "oid1", "appid1")
+    assert completed.reservation_state == "completed"
+    assert completed.completed_at > 0
+    assert completed.findings_finalized_at > 0
+    assert not completed.findings_schema_valid
+    assert completed.findings_selection_strategy == "best_structured_message"
+    assert not completed.findings_redacted
     registry.reserve_investigation(
         caller_oid="oid1",
         caller_appid="appid1",
@@ -650,6 +658,48 @@ async def test_finalized_summary_releases_quota_slot(registry):
         severity="high",
         maximum_investigations=1,
     )
+
+
+@pytest.mark.asyncio
+async def test_finalized_structured_summary_records_safe_metadata(registry):
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="consumer",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+    report = """## Platform Investigation Findings
+### Root Cause
+Route configuration changed.
+### Evidence
+- password: secret-value
+### Recommended Actions
+1. Restore the approved route.
+### Verdict
+PLATFORM ISSUE
+FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
+    platform_response = MagicMock(
+        status_code=200,
+        json=lambda: {"value": [{"author": {"role": "SREAgent"}, "text": report}]},
+    )
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+        patch("main._platform_request", AsyncMock(return_value=platform_response)),
+    ):
+        result = await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
+
+    record = registry.get_investigation(investigation_id, "oid1", "appid1")
+    assert result["status"] == "completed"
+    assert "secret-value" not in result["summary"]
+    assert record.findings_schema_version == "1.0"
+    assert record.findings_schema_valid
+    assert record.findings_selection_strategy == "best_structured_message"
+    assert record.findings_redacted
 
 
 def test_reservation_counts_against_quota_before_platform_thread_creation(registry):
@@ -677,7 +727,12 @@ def test_reservation_counts_against_quota_before_platform_thread_creation(regist
 async def test_creation_uses_one_correlation_id_for_registry_and_platform_message(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     request = CreateInvestigationRequest(description="Investigate platform issue", workload_name="consumer")
-    policy = MagicMock(maximum_concurrent_investigations=1)
+    policy = MagicMock(
+        display_name="Caller One",
+        enabled=True,
+        maximum_severity="high",
+        maximum_concurrent_investigations=1,
+    )
     platform_response = MagicMock(status_code=202, json=lambda: {"id": "private-thread-id"})
 
     with (
@@ -694,6 +749,11 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
     assert f"Correlation ID: {record.request_correlation_id}" in message
     assert message.count("Correlation ID:") == 1
     assert record.platform_thread_id == "private-thread-id"
+    assert record.activated_at > 0
+    assert record.policy_display_name == "Caller One"
+    assert record.policy_enabled
+    assert record.policy_maximum_severity == "high"
+    assert record.policy_maximum_concurrent_investigations == 1
     created_event = next(call for call in event.call_args_list if call.args[0] == "platform_thread_created")
     assert "platform_thread_id" not in created_event.kwargs
 
@@ -750,11 +810,45 @@ def test_table_registry_entity_round_trip_preserves_security_fields():
         last_status_poll=150.0,
         status_poll_count=3,
         request_correlation_id="corr-123",
+        policy_display_name="Caller One",
+        policy_enabled=True,
+        policy_maximum_severity="high",
+        policy_maximum_concurrent_investigations=2,
+        activated_at=110.0,
+        completed_at=160.0,
+        findings_finalized_at=170.0,
+        findings_schema_version="1.0",
+        findings_schema_valid=True,
+        findings_selection_strategy="best_structured_message",
+        findings_redacted=True,
     )
     entity = TableStorageInvestigationRegistry._to_entity(record)
     entity["etag"] = "etag-1"
     restored = TableStorageInvestigationRegistry._from_entity(entity)
     assert restored == record
+
+
+def test_table_registry_old_entity_uses_metadata_defaults():
+    entity = {
+        "RowKey": "inv-legacy",
+        "caller_oid": "oid1",
+        "caller_appid": "appid1",
+        "workload_name": "workload-a",
+        "workload_identity_appid": "appid1",
+        "platform_thread_id": "thread-1",
+        "severity": "medium",
+        "created_at": 100.0,
+        "expires_at": 200.0,
+    }
+
+    restored = TableStorageInvestigationRegistry._from_entity(entity)
+
+    assert restored.policy_display_name == ""
+    assert restored.policy_enabled
+    assert restored.policy_maximum_concurrent_investigations == 0
+    assert restored.completed_at == 0.0
+    assert restored.findings_finalized_at == 0.0
+    assert not restored.findings_schema_valid
 
 
 def test_table_reservation_submits_counter_and_reservation_transaction():

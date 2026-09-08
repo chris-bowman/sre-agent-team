@@ -207,7 +207,7 @@ Do not start production networking or repository-wide terminology changes before
 
 **Goal:** Preserve ownership, quotas, and investigation state under concurrency, restart, and scale-out.
 
-- [ ] P4.1 Extend registry records with idempotency, caller-policy snapshot, lifecycle timestamps, and structured-findings metadata.
+- [x] P4.1 Extend registry records with idempotency, caller-policy snapshot, lifecycle timestamps, and structured-findings metadata. Both memory and Table backends now retain the policy values used at admission, activation/completion/finalization timestamps, and safe findings schema, selection, and redaction metadata without persisting report content. Older Table rows deserialize with conservative defaults.
 - [x] P4.2 Make quota check and creation atomic using conditional writes, transactions, or a per-caller counter record.
 - [x] P4.3 Add bounded continuous expiry cleanup without full-table startup scans.
 - [ ] P4.4 Define separate retention settings for active metadata, final findings, and audit telemetry.

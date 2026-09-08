@@ -16,6 +16,17 @@ Production Table Storage uses the `privatelink.table.core.windows.net` private z
 
 Validate DNS from the running revision whenever network policy changes. Readiness proves Table access; caller-policy and Platform SRE Agent dependencies are reported through structured events and request outcomes.
 
+## Investigation registry metadata
+
+Each investigation record retains the validated caller identifiers, request idempotency data,
+the caller-policy values used at admission, and timestamps for creation, activation, terminal
+completion, and finalized-findings retrieval. It also records only safe findings metadata:
+schema version and validity, summary-selection strategy, and whether redaction occurred.
+
+The registry does not persist report bodies, credentials, bearer tokens, or other investigation
+evidence. Existing Table rows created before these metadata fields were introduced remain
+readable and use conservative defaults. Retention windows are defined separately under P4.4.
+
 ## Monitoring and alerts
 
 Collect Container App console and system logs in the deployment's Log Analytics workspace. Alert on:

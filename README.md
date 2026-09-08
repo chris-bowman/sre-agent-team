@@ -28,8 +28,13 @@ See [docs/service-contract-v1.md](docs/service-contract-v1.md) for supported tra
 schemas, and error behavior. See [docs/architecture.md](docs/architecture.md) for full diagrams
 and RBAC tables. Production DNS, egress, monitoring, and recovery guidance is in
 [docs/operations.md](docs/operations.md). Platform owners using an ALZ hub-and-spoke network
-can adapt the optional [sample investigation playbook](docs/alz-hub-spoke-playbook.md); its
-topology assumptions are not service requirements and are not deployed automatically.
+can adapt the optional [sample investigation playbook](docs/alz-hub-spoke-playbook.md).
+The playbook is reference guidance: it neither replaces nor is automatically added to the
+deployed `workload_liaison` agent. Keep the topology-neutral liaison by default. Where the
+sample matches a verified environment, selectively merge the relevant investigation steps
+into `platform/custom-agents/workload-liaison.yaml` and republish that same agent. Do not
+replace the complete liaison prompt with the playbook, because the liaison's scope, report
+format, and finalization contract must remain intact.
 
 Contributions are governed by [CONTRIBUTING.md](CONTRIBUTING.md),
 [SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
@@ -458,6 +463,12 @@ The tables below document every parameter accepted by the deployment scripts in 
 
 Custom agents are a **data-plane** concept — if you deployed with
 `-SkipCustomAgentUpload`, or the automated upload failed, add them by hand.
+
+Only custom-agent YAML files are uploaded. Documentation such as
+`docs/alz-hub-spoke-playbook.md` is never read or deployed by these steps. To adopt that
+optional playbook, first merge its applicable guidance into the existing liaison YAML;
+publishing `workload_liaison` then updates the existing agent definition with the full
+combined prompt.
 
 ### Option A — Azure portal (no tooling)
 

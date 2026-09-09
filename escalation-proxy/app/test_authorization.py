@@ -39,12 +39,27 @@ def test_validates_signature_tenant_audience_and_app_identity(authorization):
     )
 
 
+def test_accepts_app_only_managed_identity_token_without_idtyp(authorization):
+    payload = {
+        "appid": "caller-app-id",
+        "oid": "caller-object-id",
+        "roles": ["EscalationCaller"],
+    }
+
+    with patch("authorization.jwt.decode", return_value=payload):
+        assert authorization.validate_caller_token("token") == payload
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
         ({"appid": "app", "oid": "oid", "idtyp": "app", "roles": []}, "EscalationCaller"),
         (
             {"appid": "app", "oid": "oid", "idtyp": "user", "roles": ["EscalationCaller"]},
+            "application identity",
+        ),
+        (
+            {"appid": "app", "oid": "oid", "scp": "user.read", "roles": ["EscalationCaller"]},
             "application identity",
         ),
         ({"oid": "oid", "idtyp": "app", "roles": ["EscalationCaller"]}, "appid"),

@@ -81,7 +81,8 @@ class CallerAuthorization:
                 expires_at=payload.get("exp"),
             )
             raise ValueError("Caller does not have the EscalationCaller app role")
-        if payload.get("idtyp") != "app":
+        idtyp = payload.get("idtyp")
+        if idtyp not in (None, "app") or "scp" in payload:
             raise ValueError("Caller token must represent an application identity")
         if not payload.get("appid"):
             raise ValueError("Token missing appid claim")

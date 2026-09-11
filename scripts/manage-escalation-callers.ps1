@@ -239,7 +239,7 @@ function New-CallerPolicy {
 function Initialize-CallerPolicies {
     param(
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Policies,
-        [Parameter(Mandatory)] [object[]] $Assignments
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Assignments
     )
 
     if ($Policies.Count -gt 0 -or $SkipPolicyUpdate) { return @($Policies) }

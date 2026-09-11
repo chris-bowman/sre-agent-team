@@ -129,6 +129,7 @@ try {
             --registry $AcrName `
             --image "${ProxyAppName}:$ImageTag" `
             --build-arg "PIP_INDEX_URL=$PipIndexUrl" `
+            --no-logs `
             .
         if ($LASTEXITCODE -ne 0) {
             throw "ACR build failed for image '$taggedImageName'."

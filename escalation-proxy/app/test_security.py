@@ -1902,6 +1902,22 @@ def test_readiness_checks_are_cached_and_coalesced():
     circuit_check.assert_called_once()
 
 
+def test_readiness_returns_safe_failure_before_application_deadline():
+    client = TestClient(app)
+
+    async def slow_probe():
+        await asyncio.sleep(1)
+
+    with (
+        patch("main.READINESS_TIMEOUT_SECONDS", 0.01),
+        patch("main._probe_readiness_dependency", side_effect=slow_probe),
+    ):
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+
+
 def test_mcp_probe_endpoint():
     """Test that MCP probe endpoint is accessible without auth."""
     client = TestClient(app)

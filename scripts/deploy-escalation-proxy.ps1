@@ -40,6 +40,8 @@ param (
     [ValidateRange(1, 100)] [int] $MaxConcurrentPlatformRequests = 16,
     [ValidateRange(0.01, 30)] [double] $PlatformRequestQueueTimeoutSeconds = 0.25,
     [ValidateRange(0, 60)] [int] $ReadinessCacheSeconds = 5,
+    [ValidateRange(1, 60)] [int] $ReadinessTimeoutSeconds = 15,
+    [ValidateRange(2, 120)] [int] $ReadinessProbeTimeoutSeconds = 20,
     [ValidateRange(1024, 10485760)] [int] $MaxPlatformResponseBytes = 1048576,
     [ValidateRange(1, 1000)] [int] $MaxAgentMessages = 100,
     [ValidateRange(1, 3600)] [int] $MinSummaryPollIntervalSeconds = 5,
@@ -90,6 +92,9 @@ if ($MaxReplicas -lt $MinReplicas) {
 }
 if ($CallerPolicyMaxStalenessSeconds -lt $CallerPolicyRefreshSeconds) {
     throw 'CallerPolicyMaxStalenessSeconds must be greater than or equal to CallerPolicyRefreshSeconds.'
+}
+if ($ReadinessProbeTimeoutSeconds -le $ReadinessTimeoutSeconds) {
+    throw 'ReadinessProbeTimeoutSeconds must be greater than ReadinessTimeoutSeconds.'
 }
 if ([string]::IsNullOrWhiteSpace($AppConfigurationName)) {
     $subscriptionPrefix = $SubscriptionId.Replace('-', '').Substring(0, 8)
@@ -385,6 +390,8 @@ $deployOutputJson = az deployment group create `
         maxConcurrentPlatformRequests=$MaxConcurrentPlatformRequests `
         platformRequestQueueTimeoutSeconds=$($PlatformRequestQueueTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture)) `
         readinessCacheSeconds=$ReadinessCacheSeconds `
+        readinessTimeoutSeconds=$ReadinessTimeoutSeconds `
+        readinessProbeTimeoutSeconds=$ReadinessProbeTimeoutSeconds `
         maxPlatformResponseBytes=$MaxPlatformResponseBytes `
         maxAgentMessages=$MaxAgentMessages `
         minSummaryPollIntervalSeconds=$MinSummaryPollIntervalSeconds `

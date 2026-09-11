@@ -146,6 +146,7 @@ READINESS_CACHE_SECONDS = max(
     ),
     0,
 )
+READINESS_TIMEOUT_SECONDS = max(float(os.environ.get("READINESS_TIMEOUT_SECONDS", "15")), 0.1)
 EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
@@ -537,7 +538,13 @@ async def health_check():
 @app.get("/health/ready")
 async def readiness_check():
     """Report whether required policy, registry, and platform dependencies are usable."""
-    failed_dependency = await _probe_readiness_dependency()
+    try:
+        failed_dependency = await asyncio.wait_for(
+            asyncio.shield(_probe_readiness_dependency()),
+            timeout=READINESS_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        failed_dependency = "readiness_timeout"
     if failed_dependency:
         log_event("readiness_check_failed", dependency=failed_dependency)
         return JSONResponse(status_code=503, content={"status": "not_ready"})

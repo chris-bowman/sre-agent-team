@@ -140,6 +140,14 @@ param platformRequestQueueTimeoutSeconds string = '0.25'
 param readinessCacheSeconds int = 5
 
 @minValue(1)
+@description('Application deadline in seconds for one readiness dependency evaluation.')
+param readinessTimeoutSeconds int = 15
+
+@minValue(1)
+@description('Container Apps timeout in seconds for the readiness HTTP probe. Must exceed readinessTimeoutSeconds.')
+param readinessProbeTimeoutSeconds int = 20
+
+@minValue(1)
 @description('Maximum bytes accepted from one Platform SRE Agent response.')
 param maxPlatformResponseBytes int = 1048576
 
@@ -420,7 +428,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
               }
               initialDelaySeconds: 15
               periodSeconds: 30
-              timeoutSeconds: 5
+              timeoutSeconds: readinessProbeTimeoutSeconds
             }
           ]
           env: [
@@ -444,6 +452,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'MAX_CONCURRENT_PLATFORM_REQUESTS', value: string(maxConcurrentPlatformRequests) }
             { name: 'PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS', value: platformRequestQueueTimeoutSeconds }
             { name: 'READINESS_CACHE_SECONDS', value: string(readinessCacheSeconds) }
+            { name: 'READINESS_TIMEOUT_SECONDS', value: string(readinessTimeoutSeconds) }
             { name: 'MAX_PLATFORM_RESPONSE_BYTES', value: string(maxPlatformResponseBytes) }
             { name: 'MAX_AGENT_MESSAGES', value: string(maxAgentMessages) }
             { name: 'MIN_SUMMARY_POLL_INTERVAL_SECONDS', value: string(minSummaryPollIntervalSeconds) }

@@ -1,6 +1,8 @@
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+FROM python:3.12-alpine@sha256:b64631e04e4920160c50fbe8d8df828f7f35f06f425cb44aa09bca53e708a35a
 
 WORKDIR /app
+
+RUN apk upgrade --no-cache
 
 # Install dependencies first for layer caching
 COPY requirements.txt .

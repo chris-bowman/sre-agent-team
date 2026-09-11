@@ -87,6 +87,26 @@ Required permission: the deploying identity must be able to create role assignme
 az provider register -n Microsoft.App --wait
 ```
 
+Run the read-only prerequisite checker before a fresh deployment. It validates local
+tooling, Azure context and permissions, required resource providers, regional support,
+ACR existence or name availability, Graph access, and Bicep compilation. Include the
+private-networking and Entra switches when those deployment options will be used:
+
+```powershell
+.\scripts\test-deployment-prerequisites.ps1 `
+  -SubscriptionId <sub-id> `
+  -PlatformResourceGroup platformsre-rg `
+  -WorkloadResourceGroup workload-rg `
+  -AcrName <globally-unique-acr-name> `
+  -Location australiaeast `
+  -EnablePrivateNetworking `
+  -BootstrapEntraApplication
+```
+
+The checker does not register providers, create resources, or change role assignments.
+It exits unsuccessfully when a required prerequisite is missing and prints the relevant
+remediation command where one is deterministic.
+
 ---
 
 ## What is and isn't Infrastructure-as-Code

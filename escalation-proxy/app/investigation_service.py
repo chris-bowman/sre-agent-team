@@ -65,6 +65,10 @@ class InvestigationRegistry(Protocol):
         self, investigation_id: str, caller_oid: str | None, workload_identity_appid: str | None
     ) -> None: ...
 
+    def record_summary_poll(
+        self, investigation_id: str, caller_oid: str | None, workload_identity_appid: str | None
+    ) -> None: ...
+
     def complete_investigation(self, investigation_id: str, caller_appid: str | None, terminal_state: str) -> None: ...
 
     def record_findings_metadata(
@@ -101,6 +105,7 @@ class InvestigationServiceConfig:
     target_liaison_agent: str
     finalization_token: str
     require_finalization_token: bool
+    max_agent_messages: int
 
 
 class InvestigationService:
@@ -398,7 +403,7 @@ class InvestigationService:
                 messages_response = await self._platform_request(
                     "GET", f"/threads/{record.platform_thread_id}/messages", platform_token
                 )
-                messages = messages_response.json().get("value", [])
+                messages = messages_response.json().get("value", [])[-self._config.max_agent_messages :]
                 agent_texts = [
                     text
                     for message in messages
@@ -462,13 +467,19 @@ class InvestigationService:
             record = await self._run_sync(
                 self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
             )
+            await self._run_sync(self._registry.record_summary_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
-            status_code = 403 if "Unauthorized" in str(exc) else 404
+            if "Unauthorized" in str(exc):
+                status_code = 403
+            elif "rate limit" in str(exc) or "maximum summary polls" in str(exc):
+                status_code = 429
+            else:
+                status_code = 404
             raise HTTPException(status_code=status_code, detail=str(exc))
 
         platform_token = await self._run_sync(self._get_platform_agent_token)
         response = await self._platform_request("GET", f"/threads/{record.platform_thread_id}/messages", platform_token)
-        messages = response.json().get("value", [])
+        messages = response.json().get("value", [])[-self._config.max_agent_messages :]
         agent_texts = [
             text
             for message in messages

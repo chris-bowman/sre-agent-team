@@ -130,4 +130,6 @@ This is an admission, routing, and disclosure control. It does not dynamically n
 
 Per proxy replica, synchronous Azure SDK work is offloaded with `MaxConcurrentBlockingSdkCalls` (default 16). Platform requests use `MaxConcurrentPlatformRequests` (default 16) and wait up to `PlatformRequestQueueTimeoutSeconds` (default 0.25 seconds) before returning `429`. Tune these with load evidence; multiplying by the maximum replica count gives the approximate service-wide upper bound.
 
+Summary retrieval is limited independently from status polling. `MinSummaryPollIntervalSeconds` defaults to 5 seconds and `MaxSummaryPollsPerInvestigation` defaults to 288; both are persisted in the shared Table record and updated conditionally. `MaxPlatformResponseBytes` defaults to 1 MiB, and only the most recent `MaxAgentMessages` (default 100) are considered during status or findings parsing.
+
 Readiness dependency results are cached and concurrent probes are coalesced per replica for `ReadinessCacheSeconds` (default 5 seconds). This bounds App Configuration, Table, and managed-identity amplification from public probes. A cached failure remains caller-safe and recovers on the first probe after the cache window; liveness never performs dependency checks.

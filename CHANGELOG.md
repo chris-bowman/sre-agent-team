@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The project follows Kee
 - App Configuration-backed per-caller resource-group allowlists with one required scope per investigation.
 - Bounded offloading for JWT/JWKS, managed identity, App Configuration, and Table SDK calls, plus bounded Platform SRE Agent request admission.
 - Cached and coalesced readiness dependency checks to prevent public probe amplification.
+- Persisted summary polling limits plus explicit platform-response and message-processing bounds.
 
 ### Security
 

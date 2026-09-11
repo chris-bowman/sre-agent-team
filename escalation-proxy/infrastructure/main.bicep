@@ -140,6 +140,22 @@ param platformRequestQueueTimeoutSeconds string = '0.25'
 param readinessCacheSeconds int = 5
 
 @minValue(1)
+@description('Maximum bytes accepted from one Platform SRE Agent response.')
+param maxPlatformResponseBytes int = 1048576
+
+@minValue(1)
+@description('Maximum recent SRE Agent messages considered during status or findings parsing.')
+param maxAgentMessages int = 100
+
+@minValue(1)
+@description('Minimum seconds between persisted summary retrieval attempts for one investigation.')
+param minSummaryPollIntervalSeconds int = 5
+
+@minValue(1)
+@description('Maximum persisted summary retrieval attempts for one investigation.')
+param maxSummaryPollsPerInvestigation int = 288
+
+@minValue(1)
 @description('Number of exhausted Platform SRE Agent requests that opens the circuit breaker.')
 param platformCircuitFailureThreshold int = 5
 
@@ -428,6 +444,10 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'MAX_CONCURRENT_PLATFORM_REQUESTS', value: string(maxConcurrentPlatformRequests) }
             { name: 'PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS', value: platformRequestQueueTimeoutSeconds }
             { name: 'READINESS_CACHE_SECONDS', value: string(readinessCacheSeconds) }
+            { name: 'MAX_PLATFORM_RESPONSE_BYTES', value: string(maxPlatformResponseBytes) }
+            { name: 'MAX_AGENT_MESSAGES', value: string(maxAgentMessages) }
+            { name: 'MIN_SUMMARY_POLL_INTERVAL_SECONDS', value: string(minSummaryPollIntervalSeconds) }
+            { name: 'MAX_SUMMARY_POLLS_PER_INVESTIGATION', value: string(maxSummaryPollsPerInvestigation) }
             { name: 'MCP_ALLOWED_HOSTS', value: mcpAllowedHosts }
             { name: 'MCP_ENABLE_DNS_REBINDING_PROTECTION', value: mcpEnableDnsRebindingProtection }
             { name: 'PLATFORM_CIRCUIT_FAILURE_THRESHOLD', value: string(platformCircuitFailureThreshold) }

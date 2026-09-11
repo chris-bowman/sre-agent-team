@@ -18,6 +18,7 @@ SRE_AGENT_SCOPE = os.environ.get("SRE_AGENT_SCOPE", "https://azuresre.dev/.defau
 PLATFORM_AGENT_V1_API = f"{PLATFORM_AGENT_ENDPOINT}/api/v1"
 PLATFORM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("PLATFORM_REQUEST_TIMEOUT_SECONDS", "30"))
 PLATFORM_REQUEST_MAX_ATTEMPTS = int(os.environ.get("PLATFORM_REQUEST_MAX_ATTEMPTS", "3"))
+MAX_PLATFORM_RESPONSE_BYTES = max(int(os.environ.get("MAX_PLATFORM_RESPONSE_BYTES", "1048576")), 1024)
 PLATFORM_CIRCUIT_FAILURE_THRESHOLD = max(int(os.environ.get("PLATFORM_CIRCUIT_FAILURE_THRESHOLD", "5")), 1)
 PLATFORM_CIRCUIT_RECOVERY_SECONDS = max(float(os.environ.get("PLATFORM_CIRCUIT_RECOVERY_SECONDS", "30")), 1.0)
 
@@ -104,6 +105,8 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                     **kwargs,
                 )
+            if len(response.content) > MAX_PLATFORM_RESPONSE_BYTES:
+                raise HTTPException(status_code=502, detail="Platform response exceeded the configured size limit")
             if response.status_code not in retryable_statuses:
                 response.raise_for_status()
                 _platform_circuit_breaker.record_success()

@@ -133,6 +133,7 @@ MAX_IDEMPOTENCY_KEY_SIZE = 128
 MAX_REQUEST_BODY_BYTES = max(int(os.environ.get("MAX_REQUEST_BODY_BYTES", "65536")), 16384)
 MAX_CONCURRENT_BLOCKING_SDK_CALLS = max(int(os.environ.get("MAX_CONCURRENT_BLOCKING_SDK_CALLS", "16")), 1)
 MAX_CONCURRENT_PLATFORM_REQUESTS = max(int(os.environ.get("MAX_CONCURRENT_PLATFORM_REQUESTS", "16")), 1)
+MAX_AGENT_MESSAGES = max(int(os.environ.get("MAX_AGENT_MESSAGES", "100")), 1)
 PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS = max(
     float(os.environ.get("PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS", "0.25")), 0.01
 )
@@ -459,6 +460,7 @@ def _build_investigation_service(
             target_liaison_agent=TARGET_LIAISON_AGENT,
             finalization_token=FINALIZATION_TOKEN,
             require_finalization_token=REQUIRE_FINALIZATION_TOKEN,
+            max_agent_messages=MAX_AGENT_MESSAGES,
         ),
         registry=_investigation_registry,
         caller_policy_store=_caller_policy_store,

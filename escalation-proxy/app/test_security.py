@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import jwt as pyjwt
 import pytest
+from azure.core import MatchConditions
 from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError
 from azure.data.tables._deserialize import _convert_to_entity
 from fastapi import FastAPI, HTTPException
@@ -257,6 +258,22 @@ def test_registry_enforces_maximum_poll_count(registry):
 
     with pytest.raises(ValueError, match="reached maximum status polls"):
         registry.record_status_poll(inv_id, "oid1", "appid1")
+
+
+def test_registry_enforces_summary_poll_interval(registry):
+    inv_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+
+    registry.record_summary_poll(inv_id, "oid1", "appid1")
+
+    with pytest.raises(ValueError, match="Summary poll rate limit"):
+        registry.record_summary_poll(inv_id, "oid1", "appid1")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -592,6 +609,20 @@ async def test_platform_request_does_not_retry_uncertain_post():
 
     assert exc.value.status_code == 503
     assert post.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_platform_request_rejects_oversized_response_without_retry():
+    response = MagicMock(status_code=200, content=b"x" * 11)
+    with (
+        patch("platform_client.MAX_PLATFORM_RESPONSE_BYTES", 10),
+        patch("platform_client.httpx.AsyncClient.get", new_callable=AsyncMock, return_value=response) as get,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _platform_request("GET", "/threads/thread-123/messages", "platform-token")
+
+    assert exc.value.status_code == 502
+    assert get.await_count == 1
 
 
 def test_platform_circuit_breaker_rejects_requests_while_open():
@@ -1253,6 +1284,34 @@ def test_table_registry_reads_conditional_etag_from_sdk_metadata():
 def test_table_registry_rejects_missing_etag_for_conditional_mutation():
     with pytest.raises(ValueError, match="missing an ETag"):
         TableStorageInvestigationRegistry._entity_etag({"PartitionKey": "appid1", "RowKey": "investigation1"})
+
+
+def test_table_summary_poll_uses_conditional_update():
+    record = InvestigationRecord(
+        investigation_id="investigation1",
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+        created_at=time.time(),
+        expires_at=time.time() + 60,
+    )
+    entity = TableStorageInvestigationRegistry._to_entity(record)
+    entity["etag"] = "summary-etag"
+    table = MagicMock()
+    table.get_entity.return_value = entity
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = table
+
+    registry.record_summary_poll("investigation1", "oid1", "appid1")
+
+    updated = table.update_entity.call_args.args[0]
+    assert updated["summary_poll_count"] == 1
+    assert updated["last_summary_poll"] > 0
+    assert table.update_entity.call_args.kwargs["etag"] == "summary-etag"
+    assert table.update_entity.call_args.kwargs["match_condition"] == MatchConditions.IfNotModified
 
 
 def test_table_idempotency_lookup_escapes_key_and_rejects_foreign_record():

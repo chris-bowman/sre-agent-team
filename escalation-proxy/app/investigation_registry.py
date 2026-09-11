@@ -27,6 +27,8 @@ FINAL_FINDINGS_METADATA_RETENTION_SECONDS = max(
 MAX_INVESTIGATIONS_PER_WORKLOAD = 100  # max concurrent
 MIN_STATUS_POLL_INTERVAL_SECONDS = int(os.environ.get("MIN_STATUS_POLL_INTERVAL_SECONDS", "5"))
 MAX_STATUS_POLLS_PER_INVESTIGATION = 288  # generous cap; long-polling means far fewer calls in practice
+MIN_SUMMARY_POLL_INTERVAL_SECONDS = int(os.environ.get("MIN_SUMMARY_POLL_INTERVAL_SECONDS", "5"))
+MAX_SUMMARY_POLLS_PER_INVESTIGATION = int(os.environ.get("MAX_SUMMARY_POLLS_PER_INVESTIGATION", "288"))
 
 
 @dataclass
@@ -44,6 +46,8 @@ class InvestigationRecord:
     expires_at: float  # Unix timestamp
     last_status_poll: float = 0.0  # Last time status was polled
     status_poll_count: int = 0  # Number of times status was polled
+    last_summary_poll: float = 0.0
+    summary_poll_count: int = 0
     request_correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     idempotency_key: str = ""
     request_fingerprint: str = ""
@@ -277,6 +281,20 @@ class InvestigationRegistry:
         record.last_status_poll = now
         record.status_poll_count += 1
 
+    def record_summary_poll(self, investigation_id: str, caller_oid: str, workload_identity_appid: str) -> None:
+        """Record a summary poll and enforce independent summary rate limits."""
+        record = self.get_investigation(investigation_id, caller_oid, workload_identity_appid)
+        now = time.time()
+        if record.last_summary_poll > 0 and now - record.last_summary_poll < MIN_SUMMARY_POLL_INTERVAL_SECONDS:
+            raise ValueError(f"Summary poll rate limit: minimum {MIN_SUMMARY_POLL_INTERVAL_SECONDS}s between polls")
+        if record.summary_poll_count >= MAX_SUMMARY_POLLS_PER_INVESTIGATION:
+            raise ValueError(
+                f"Investigation {investigation_id} has reached maximum summary polls "
+                f"({MAX_SUMMARY_POLLS_PER_INVESTIGATION})"
+            )
+        record.last_summary_poll = now
+        record.summary_poll_count += 1
+
     def check_workload_quota(self, workload_identity_appid: str, maximum_investigations: int | None = None) -> None:
         """Check if a caller has reached its investigation quota. Raises ValueError if exceeded."""
         quota = maximum_investigations or MAX_INVESTIGATIONS_PER_WORKLOAD
@@ -432,6 +450,8 @@ class TableStorageInvestigationRegistry:
             "expires_at": record.expires_at,
             "last_status_poll": record.last_status_poll,
             "status_poll_count": record.status_poll_count,
+            "last_summary_poll": record.last_summary_poll,
+            "summary_poll_count": record.summary_poll_count,
             "request_correlation_id": record.request_correlation_id,
             "idempotency_key": record.idempotency_key,
             "request_fingerprint": record.request_fingerprint,
@@ -463,6 +483,8 @@ class TableStorageInvestigationRegistry:
             expires_at=float(entity["expires_at"]),
             last_status_poll=float(entity.get("last_status_poll", 0.0)),
             status_poll_count=int(entity.get("status_poll_count", 0)),
+            last_summary_poll=float(entity.get("last_summary_poll", 0.0)),
+            summary_poll_count=int(entity.get("summary_poll_count", 0)),
             request_correlation_id=entity.get("request_correlation_id", str(uuid.uuid4())),
             idempotency_key=entity.get("idempotency_key", ""),
             request_fingerprint=entity.get("request_fingerprint", ""),
@@ -852,6 +874,48 @@ class TableStorageInvestigationRegistry:
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
         raise ValueError("Status poll update conflicted; please retry")
+
+    def record_summary_poll(self, investigation_id: str, caller_oid: str, workload_identity_appid: str) -> None:
+        for attempt in range(3):
+            try:
+                entity = self._table.get_entity(self._partition_key(workload_identity_appid), investigation_id)
+                record = self._from_entity(entity)
+                if record.workload_identity_appid != workload_identity_appid:
+                    telemetry.log_event(
+                        "investigation_access_denied",
+                        investigation_id=investigation_id,
+                        reason="caller_workload_identity_mismatch",
+                        provided_appid=workload_identity_appid,
+                    )
+                    raise ValueError("Unauthorized: investigation belongs to a different caller")
+                if time.time() > record.expires_at:
+                    self._delete_entity_if_unchanged(entity)
+                    raise ValueError(f"Investigation {investigation_id} has expired")
+                now = time.time()
+                if record.last_summary_poll > 0 and now - record.last_summary_poll < MIN_SUMMARY_POLL_INTERVAL_SECONDS:
+                    raise ValueError(
+                        f"Summary poll rate limit: minimum {MIN_SUMMARY_POLL_INTERVAL_SECONDS}s between polls"
+                    )
+                if record.summary_poll_count >= MAX_SUMMARY_POLLS_PER_INVESTIGATION:
+                    raise ValueError(
+                        f"Investigation {investigation_id} has reached maximum summary polls "
+                        f"({MAX_SUMMARY_POLLS_PER_INVESTIGATION})"
+                    )
+                record.last_summary_poll = now
+                record.summary_poll_count += 1
+                self._table.update_entity(
+                    self._to_entity(record),
+                    mode=UpdateMode.REPLACE,
+                    etag=self._entity_etag(entity),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                return
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
+                telemetry.log_event("table_investigation_conflict", operation="summary_poll", attempt=attempt + 1)
+                time.sleep((0.05 * (2**attempt)) + random.uniform(0, 0.05))
+        raise ValueError("Summary poll update conflicted; please retry")
 
     def check_workload_quota(self, workload_identity_appid: str, maximum_investigations: int | None = None) -> None:
         quota = maximum_investigations or MAX_INVESTIGATIONS_PER_WORKLOAD

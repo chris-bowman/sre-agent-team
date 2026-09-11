@@ -1010,6 +1010,24 @@ def test_v1_create_rejects_oversized_idempotency_key():
     assert response.json()["code"] == "invalid_request"
 
 
+@pytest.mark.asyncio
+async def test_create_rejects_disabled_caller_with_forbidden(registry):
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    request = CreateInvestigationRequest(description="Investigate platform issue", workload_name="consumer")
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch(
+            "main._caller_policy_store.authorize",
+            side_effect=ValueError("Caller is disabled for the escalation service"),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _create_investigation_impl(request, caller, "disabled-caller-request")
+
+    assert exc.value.status_code == 403
+
+
 def test_requested_severity_respects_token_claim_ceiling():
     assert validate_requested_severity("high", {"max_escalation_severity": "high"}) == "high"
     with pytest.raises(ValueError, match="exceeds token limit"):
@@ -1608,6 +1626,15 @@ def test_readiness_check_reports_dependency_failure_without_details():
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready"}
     assert "secret platform detail" not in response.text
+
+
+def test_readiness_check_reports_open_platform_circuit_without_details():
+    client = TestClient(app)
+    with patch("main._platform_circuit_breaker.is_available", return_value=False):
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
 
 
 def test_readiness_check_reports_policy_failure_without_details():

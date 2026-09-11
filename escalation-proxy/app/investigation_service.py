@@ -172,6 +172,9 @@ class InvestigationService:
             )
         try:
             normalized_severity = self._validate_requested_severity(req.severity, caller.claims)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
             caller_policy = self._caller_policy_store.authorize(caller.appid, normalized_severity)
         except ValueError as exc:
             self._event_sink(
@@ -181,7 +184,7 @@ class InvestigationService:
                 caller_appid=caller.appid,
                 severity=req.severity,
             )
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         if len(req.context) > self._config.max_context_size:
             raise HTTPException(
                 status_code=400,

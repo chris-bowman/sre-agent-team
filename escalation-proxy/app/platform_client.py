@@ -41,6 +41,10 @@ class PlatformCircuitBreaker:
                 raise HTTPException(status_code=503, detail="Platform SRE Agent is temporarily unavailable")
             self._probe_in_flight = True
 
+    def is_available(self) -> bool:
+        with self._lock:
+            return self._opened_at is None and not self._probe_in_flight
+
     def record_success(self) -> None:
         with self._lock:
             was_open = self._opened_at is not None

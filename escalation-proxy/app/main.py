@@ -433,6 +433,9 @@ async def readiness_check():
     except Exception:
         log_event("readiness_check_failed", dependency="platform_identity")
         return JSONResponse(status_code=503, content={"status": "not_ready"})
+    if not _platform_circuit_breaker.is_available():
+        log_event("readiness_check_failed", dependency="platform_circuit")
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
     log_event("readiness_check_succeeded", outcome="success")
     return {"status": "ready"}
 

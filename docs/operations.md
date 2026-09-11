@@ -135,3 +135,33 @@ Summary retrieval is limited independently from status polling. `MinSummaryPollI
 Readiness dependency results are cached and concurrent probes are coalesced per replica for `ReadinessCacheSeconds` (default 5 seconds). This bounds App Configuration, Table, and managed-identity amplification from public probes. A cached failure remains caller-safe and recovers on the first probe after the cache window; liveness never performs dependency checks.
 
 The application readiness deadline defaults to 15 seconds and returns safe `503` on timeout. The Container Apps readiness probe timeout defaults to 20 seconds and must remain greater than the application deadline. This accommodates cold managed-identity and private-endpoint initialization without allowing an unbounded health request or restarting a live process.
+
+### Weekend checkpoint: 2026-09-11
+
+The proxy is intentionally configured with `minReplicas=0`, `maxReplicas=1`, and all revisions are deactivated to guarantee zero weekend replicas. Source checkpoint `c551ca9` and immutable image `sha256:8821370f1b658b85a962acc24f2fe629926661947a0bc293c04631d0798ed3b2` contain the summary controls and readiness deadline; Trivy reported zero HIGH/CRITICAL findings. Do not treat this image as readiness-validated: cold live probes still timed out and caused restart loops.
+
+Resume with a controlled single replica while diagnosing readiness:
+
+```powershell
+$revision = az containerapp show `
+	--resource-group platformsre-rg `
+	--name sre-escalation-proxy `
+	--subscription bf3a76f2-1806-416a-8790-136979d3a04b `
+	--query properties.latestRevisionName `
+	--output tsv
+
+az containerapp revision activate `
+	--resource-group platformsre-rg `
+	--name sre-escalation-proxy `
+	--subscription bf3a76f2-1806-416a-8790-136979d3a04b `
+	--revision $revision
+
+az containerapp update `
+	--resource-group platformsre-rg `
+	--name sre-escalation-proxy `
+	--subscription bf3a76f2-1806-416a-8790-136979d3a04b `
+	--min-replicas 1 `
+	--max-replicas 1
+```
+
+Verify `/health/live` first. Then inspect revision-specific console and system logs while invoking `/health/ready` once. Determine which of App Configuration, Table Storage, or managed-identity token acquisition exceeds its bound before restoring two replicas or traffic testing.

@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The project follows Kee
 - Cached and coalesced readiness dependency checks to prevent public probe amplification.
 - Persisted summary polling limits plus explicit platform-response and message-processing bounds.
 
+### Known Issues
+
+- Cold live readiness checks can exceed the Container Apps probe budget and cause revision restart loops. The proxy is scaled to zero at the weekend checkpoint pending diagnosis; P12.1 remains open.
+
 ### Security
 
 - Platform-owned findings are reduced to a caller-safe platform-team handoff.

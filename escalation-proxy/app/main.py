@@ -131,6 +131,11 @@ MAX_INVESTIGATION_CONTEXT_SIZE = 10000  # characters
 MAX_WORKLOAD_NAME_SIZE = 256  # characters
 MAX_IDEMPOTENCY_KEY_SIZE = 128
 MAX_REQUEST_BODY_BYTES = max(int(os.environ.get("MAX_REQUEST_BODY_BYTES", "65536")), 16384)
+MAX_CONCURRENT_BLOCKING_SDK_CALLS = max(int(os.environ.get("MAX_CONCURRENT_BLOCKING_SDK_CALLS", "16")), 1)
+MAX_CONCURRENT_PLATFORM_REQUESTS = max(int(os.environ.get("MAX_CONCURRENT_PLATFORM_REQUESTS", "16")), 1)
+PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS = max(
+    float(os.environ.get("PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS", "0.25")), 0.01
+)
 EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
@@ -156,6 +161,29 @@ _caller_policy_store = build_caller_policy_store(
     maximum_staleness_seconds=CALLER_POLICY_MAX_STALENESS_SECONDS,
     event_sink=log_event,
 )
+_blocking_sdk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_BLOCKING_SDK_CALLS)
+_platform_request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PLATFORM_REQUESTS)
+
+
+async def _run_blocking_sdk_call(function, *args, **kwargs):
+    async with _blocking_sdk_semaphore:
+        return await asyncio.to_thread(function, *args, **kwargs)
+
+
+async def _bounded_platform_request(*args, **kwargs):
+    try:
+        await asyncio.wait_for(
+            _platform_request_semaphore.acquire(),
+            timeout=PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=429, detail="Platform request capacity is temporarily exhausted") from exc
+    try:
+        return await _platform_request(*args, **kwargs)
+    finally:
+        _platform_request_semaphore.release()
+
+
 _caller_authorization = CallerAuthorization(
     tenant_id=ENTRA_TENANT_ID,
     client_id=ENTRA_CLIENT_ID,
@@ -391,7 +419,7 @@ def _build_investigation_service(
         caller_policy_store=_caller_policy_store,
         validate_requested_severity=validate_requested_severity,
         get_platform_agent_token=get_platform_agent_token,
-        platform_request=_platform_request,
+        platform_request=_bounded_platform_request,
         normalize_status_value=_normalize_status_value,
         select_best_summary_text=_select_best_summary_text,
         is_finalized_summary=_is_finalized_summary,
@@ -402,6 +430,7 @@ def _build_investigation_service(
         monotonic=time.monotonic,
         wall_time=time.time,
         uuid_factory=uuid.uuid4,
+        run_sync=_run_blocking_sdk_call,
         fetch_status_once=fetch_status_once,
     )
 
@@ -427,17 +456,17 @@ async def _get_summary_impl(req: GetInvestigationRequest, caller: CallerIdentity
     return await _build_investigation_service().get_summary(req, caller)
 
 
-def _v1_lifecycle_response(
+async def _v1_lifecycle_response(
     investigation_id: str, status: str, caller: CallerIdentity
 ) -> InvestigationLifecycleResponse:
     """Build the canonical lifecycle response from caller-owned registry data."""
-    return _build_investigation_service().v1_lifecycle_response(investigation_id, status, caller)
+    return await _build_investigation_service().v1_lifecycle_response(investigation_id, status, caller)
 
 
-def _v1_findings_response(
+async def _v1_findings_response(
     investigation_id: str, result: dict[str, Any], caller: CallerIdentity
 ) -> InvestigationFindingsResponse:
-    return _build_investigation_service().v1_findings_response(investigation_id, result, caller)
+    return await _build_investigation_service().v1_findings_response(investigation_id, result, caller)
 
 
 # ── HTTP Endpoints ───────────────────────────────────────────────────────────
@@ -627,7 +656,7 @@ async def create_investigation_v1(
         context=req.context,
     )
     result = await _create_investigation_impl(legacy_request, caller, idempotency_key)
-    response = _v1_lifecycle_response(result["investigation_id"], result["status"], caller)
+    response = await _v1_lifecycle_response(result["investigation_id"], result["status"], caller)
     return response
 
 
@@ -669,7 +698,7 @@ async def get_investigation_v1(
         GetInvestigationRequest(investigation_id=investigation_id, wait_seconds=wait_seconds),
         caller,
     )
-    return _v1_lifecycle_response(investigation_id, result["status"], caller)
+    return await _v1_lifecycle_response(investigation_id, result["status"], caller)
 
 
 @app.get(
@@ -683,7 +712,7 @@ async def get_investigation_findings_v1(
     """Get validated findings for a completed investigation."""
     _token, caller = extract_and_validate_token(authorization)
     result = await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
-    return _v1_findings_response(investigation_id, result, caller)
+    return await _v1_findings_response(investigation_id, result, caller)
 
 
 @app.post("/api/investigations/summary", response_model=RedactedSummaryResponse)

@@ -36,6 +36,9 @@ param (
     [ValidateRange(1, 365)] [int] $ActiveMetadataRetentionDays = 1,
     [ValidateRange(1, 365)] [int] $FinalFindingsMetadataRetentionDays = 7,
     [ValidateRange(1, 86400)] [int] $ExpiryCleanupIntervalSeconds = 300,
+    [ValidateRange(1, 100)] [int] $MaxConcurrentBlockingSdkCalls = 16,
+    [ValidateRange(1, 100)] [int] $MaxConcurrentPlatformRequests = 16,
+    [ValidateRange(0.01, 30)] [double] $PlatformRequestQueueTimeoutSeconds = 0.25,
     [ValidateSet('table', 'memory')] [string] $RegistryBackend = 'table',
     [switch] $EnablePrivateNetworking,
     [string] $PrivateNetworkName = '',
@@ -373,6 +376,9 @@ $deployOutputJson = az deployment group create `
         activeMetadataRetentionDays=$ActiveMetadataRetentionDays `
         finalFindingsMetadataRetentionDays=$FinalFindingsMetadataRetentionDays `
         expiryCleanupIntervalSeconds=$ExpiryCleanupIntervalSeconds `
+        maxConcurrentBlockingSdkCalls=$MaxConcurrentBlockingSdkCalls `
+        maxConcurrentPlatformRequests=$MaxConcurrentPlatformRequests `
+        platformRequestQueueTimeoutSeconds=$($PlatformRequestQueueTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture)) `
         "enablePrivateNetworking=$privateNetworkingValue" `
         privateNetworkName=$PrivateNetworkName `
         privateNetworkAddressPrefix=$PrivateNetworkAddressPrefix `

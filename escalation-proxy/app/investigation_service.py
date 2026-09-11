@@ -86,6 +86,7 @@ class PlatformResponse(Protocol):
 EventSink = Callable[..., None]
 PlatformRequest = Callable[..., Awaitable[PlatformResponse]]
 StatusFetcher = Callable[[InvestigationRecord], Awaitable[str]]
+RunSync = Callable[..., Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,7 @@ class InvestigationService:
         monotonic: Callable[[], float],
         wall_time: Callable[[], float],
         uuid_factory: Callable[[], Any],
+        run_sync: RunSync,
         fetch_status_once: StatusFetcher | None = None,
     ) -> None:
         self._config = config
@@ -142,11 +144,12 @@ class InvestigationService:
         self._monotonic = monotonic
         self._wall_time = wall_time
         self._uuid_factory = uuid_factory
+        self._run_sync = run_sync
         self._fetch_status_once = fetch_status_once
 
-    def _authorize_read(self, caller: CallerIdentity) -> None:
+    async def _authorize_read(self, caller: CallerIdentity) -> None:
         try:
-            self._caller_policy_store.authorize(caller.appid, "low")
+            await self._run_sync(self._caller_policy_store.authorize, caller.appid, "low")
         except ValueError as exc:
             self._event_sink(
                 "investigation_access_denied",
@@ -177,7 +180,7 @@ class InvestigationService:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
-            caller_policy = self._caller_policy_store.authorize(caller.appid, normalized_severity)
+            caller_policy = await self._run_sync(self._caller_policy_store.authorize, caller.appid, normalized_severity)
         except ValueError as exc:
             self._event_sink(
                 "investigation_admission_denied",
@@ -200,7 +203,11 @@ class InvestigationService:
         if not req.resource_group_id:
             raise HTTPException(status_code=400, detail="resource_group_id is required")
         try:
-            self._caller_policy_store.authorize_resource_group(caller.appid, req.resource_group_id)
+            await self._run_sync(
+                self._caller_policy_store.authorize_resource_group,
+                caller.appid,
+                req.resource_group_id,
+            )
         except ValueError as exc:
             self._event_sink(
                 "investigation_admission_denied",
@@ -225,7 +232,7 @@ class InvestigationService:
             ).encode("utf-8")
         ).hexdigest()
         if idempotency_key:
-            existing = self._registry.find_by_idempotency_key(caller.appid, idempotency_key)
+            existing = await self._run_sync(self._registry.find_by_idempotency_key, caller.appid, idempotency_key)
             if existing:
                 if existing.request_fingerprint != request_fingerprint:
                     self._event_sink(
@@ -249,7 +256,8 @@ class InvestigationService:
 
         correlation_id = str(self._uuid_factory())
         try:
-            reservation = self._registry.reserve_investigation(
+            reservation = await self._run_sync(
+                self._registry.reserve_investigation,
                 caller_oid=caller.oid,
                 caller_appid=caller.appid,
                 workload_name=req.workload_name,
@@ -312,7 +320,7 @@ class InvestigationService:
 
         platform_request_started = False
         try:
-            platform_token = self._get_platform_agent_token()
+            platform_token = await self._run_sync(self._get_platform_agent_token)
             platform_request_started = True
             response = await self._platform_request(
                 "POST",
@@ -326,10 +334,10 @@ class InvestigationService:
             if not thread_id:
                 raise HTTPException(status_code=502, detail="Platform thread creation response missing id")
 
-            self._registry.finalize_reservation(investigation_id, caller.appid, thread_id)
+            await self._run_sync(self._registry.finalize_reservation, investigation_id, caller.appid, thread_id)
         except Exception:
             if not platform_request_started:
-                self._registry.release_reservation(investigation_id, caller.appid)
+                await self._run_sync(self._registry.release_reservation, investigation_id, caller.appid)
                 self._event_sink("investigation_reservation_released", investigation_id=investigation_id)
             else:
                 self._event_sink(
@@ -357,7 +365,7 @@ class InvestigationService:
         }
 
     async def fetch_investigation_status_once(self, record: InvestigationRecord) -> str:
-        platform_token = self._get_platform_agent_token()
+        platform_token = await self._run_sync(self._get_platform_agent_token)
         response = await self._platform_request("GET", f"/threads/{record.platform_thread_id}", platform_token)
         data = response.json()
 
@@ -418,10 +426,12 @@ class InvestigationService:
         return status
 
     async def get_status(self, req: GetInvestigationRequest, caller: CallerIdentity) -> dict[str, Any]:
-        self._authorize_read(caller)
+        await self._authorize_read(caller)
         try:
-            record = self._registry.get_investigation(req.investigation_id, caller.oid, caller.appid)
-            self._registry.record_status_poll(req.investigation_id, caller.oid, caller.appid)
+            record = await self._run_sync(
+                self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
+            )
+            await self._run_sync(self._registry.record_status_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             status_code = 403 if "Unauthorized" in str(exc) else 429
             raise HTTPException(status_code=status_code, detail=str(exc))
@@ -436,7 +446,7 @@ class InvestigationService:
             status = await fetch_status_once(record)
 
         if status in ("completed", "failed"):
-            self._registry.complete_investigation(req.investigation_id, caller.appid, status)
+            await self._run_sync(self._registry.complete_investigation, req.investigation_id, caller.appid, status)
             self._event_sink(
                 "investigation_terminal",
                 outcome=status,
@@ -447,14 +457,16 @@ class InvestigationService:
         return {"investigation_id": req.investigation_id, "status": status, "progress": ""}
 
     async def get_summary(self, req: GetInvestigationRequest, caller: CallerIdentity) -> dict[str, Any]:
-        self._authorize_read(caller)
+        await self._authorize_read(caller)
         try:
-            record = self._registry.get_investigation(req.investigation_id, caller.oid, caller.appid)
+            record = await self._run_sync(
+                self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
+            )
         except ValueError as exc:
             status_code = 403 if "Unauthorized" in str(exc) else 404
             raise HTTPException(status_code=status_code, detail=str(exc))
 
-        platform_token = self._get_platform_agent_token()
+        platform_token = await self._run_sync(self._get_platform_agent_token)
         response = await self._platform_request("GET", f"/threads/{record.platform_thread_id}/messages", platform_token)
         messages = response.json().get("value", [])
         agent_texts = [
@@ -496,8 +508,9 @@ class InvestigationService:
             requires_finalization_token=self._config.require_finalization_token,
             finalization_token=self._config.finalization_token,
         )
-        self._registry.complete_investigation(req.investigation_id, caller.appid, status)
-        self._registry.record_findings_metadata(
+        await self._run_sync(self._registry.complete_investigation, req.investigation_id, caller.appid, status)
+        await self._run_sync(
+            self._registry.record_findings_metadata,
             req.investigation_id,
             caller.appid,
             True,
@@ -536,12 +549,12 @@ class InvestigationService:
             "limitations": ["Platform investigation details are restricted to the platform team."],
         }
 
-    def v1_lifecycle_response(
+    async def v1_lifecycle_response(
         self, investigation_id: str, status: str, caller: CallerIdentity
     ) -> InvestigationLifecycleResponse:
-        self._authorize_read(caller)
+        await self._authorize_read(caller)
         try:
-            record = self._registry.get_investigation(investigation_id, caller.oid, caller.appid)
+            record = await self._run_sync(self._registry.get_investigation, investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
@@ -559,10 +572,10 @@ class InvestigationService:
             ),
         )
 
-    def v1_findings_response(
+    async def v1_findings_response(
         self, investigation_id: str, result: dict[str, Any], caller: CallerIdentity
     ) -> InvestigationFindingsResponse:
-        self._authorize_read(caller)
+        await self._authorize_read(caller)
         if result.get("status") != "completed":
             raise HTTPException(status_code=409, detail="Investigation findings are not available yet")
 
@@ -572,7 +585,7 @@ class InvestigationService:
             raise HTTPException(status_code=502, detail="Platform findings did not satisfy the required report format")
 
         try:
-            record = self._registry.get_investigation(investigation_id, caller.oid, caller.appid)
+            record = await self._run_sync(self._registry.get_investigation, investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Investigation not found") from exc
 

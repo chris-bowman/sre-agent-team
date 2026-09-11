@@ -15,6 +15,7 @@ Covers:
 import asyncio
 import hashlib
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -49,10 +50,12 @@ from main import (
     PlatformCircuitBreaker,
     RedactedSummaryResponse,
     TableStorageInvestigationRegistry,
+    _bounded_platform_request,
     _create_investigation_impl,
     _get_status_impl,
     _get_summary_impl,
     _platform_request,
+    _run_blocking_sdk_call,
     _run_expiry_cleanup,
     app,
     log_event,
@@ -834,6 +837,44 @@ async def test_completed_idempotency_replay_does_not_create_another_platform_thr
 
     assert result["investigation_id"] == investigation_id
     assert exc_info.value.status_code == 409
+    platform_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_blocking_sdk_call_does_not_stall_event_loop():
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_call():
+        started.set()
+        release.wait(timeout=2)
+        return "completed"
+
+    task = asyncio.create_task(_run_blocking_sdk_call(blocking_call))
+    try:
+        for _ in range(20):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        assert not task.done()
+    finally:
+        release.set()
+
+    assert await task == "completed"
+
+
+@pytest.mark.asyncio
+async def test_platform_request_capacity_exhaustion_is_bounded():
+    with (
+        patch("main._platform_request_semaphore.acquire", new_callable=AsyncMock, side_effect=TimeoutError),
+        patch("main._platform_request", new_callable=AsyncMock) as platform_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _bounded_platform_request("GET", "/threads/thread-1", "token")
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail == "Platform request capacity is temporarily exhausted"
     platform_request.assert_not_awaited()
 
 

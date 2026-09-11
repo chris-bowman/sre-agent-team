@@ -2,8 +2,8 @@
 
 ## Status
 
-- Overall: All v1 work packages and release gates are complete; the fresh-tenant production deployment is healthy
-- Current work package: v1.0.0 released; post-v1 operations
+- Overall: v1.0.0 released; the 2026-09-11 assessment reopened security and reliability acceptance. Broader production rollout is not recommended until the post-assessment gate passes.
+- Current work package: WP9-WP13 planned, not started; documentation only, no remediation deployed
 - Last updated: 2026-09-11
 - Primary product: Platform SRE Agent and least-privilege escalation proxy
 - Reference consumer: Workload SRE Agent
@@ -11,9 +11,18 @@
 
 ## Session checkpoint and continuation plan
 
-**Checkpoint date: 2026-09-07**
+**Checkpoint date: 2026-09-11**
 
-This checkpoint reflects the repo and deployment state as of 2026-09-07 and should be used as the handoff point for future sessions.
+The 2026-09-11 read-only assessment is the current handoff. Earlier deployment checkpoints below are historical evidence, not proof that the newly identified security cases pass. WP9-WP13 and the post-assessment gate supersede conflicting completion claims.
+
+### Security assessment handoff (2026-09-11)
+
+- Reviewed release commit `9e52e29577b2564056f76601e2df4a9f881ef7d3`. All 94 existing tests passed, but additional local probes exposed authorization, output-boundary, query-isolation, and concurrency defects.
+- SDK-backed/local simulations reproduced wildcard Table ETags, quota-one admitting two reservations, expired-policy acceptance after a failed refresh, disabled-caller reads, unvalidated intermediate summaries, unsafe OData predicates, and repeated POST attempts after an uncertain creation outcome.
+- Readiness returned `200` with platform calls configured to fail; dependency `503` responses reported `internal_error` with `retryable: false`.
+- Validation was source review and local mocked testing, not a production penetration test. No application code, cloud resources, or release artifacts were changed by the assessment.
+- The image scan previously recorded 51 HIGH and 3 CRITICAL OS-package findings without fixes. These are scanner findings requiring exploitability triage, not proof of remotely exploitable application vulnerabilities; a fixable-only gate is not blanket acceptance.
+- Start with WP9. WP10 and WP11 address the other high-priority defects; WP12 handles availability and deployment controls; WP13 owns independent verification and renewed sign-off. See the finding-to-work-item map below.
 
 ### Runtime recovery and release hardening (2026-09-07)
 
@@ -76,6 +85,8 @@ This checkpoint reflects the repo and deployment state as of 2026-09-07 and shou
 
 ### Release gate status
 
+**Historical v1 evidence only:** the completion statements below describe the earlier tests. Authorization, idempotency, quota concurrency, findings/log safety, outage semantics, and vulnerability acceptance are reopened under WP9-WP13. Successful connector operation and delivered alerts do not establish these security properties.
+
 - **Caller administration and negative authorization**: Complete; independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, restart survival, disabled/revoked callers, live idempotency, and severity-limit enforcement are validated.
 - **Official MCP conformance**: Complete; official-client tests cover negotiation, reconnect behavior, malformed requests, authorization failures, and all supported tool paths.
 - **Outage behavior**: Complete; readiness, retries, safe public errors, and recovery were validated for registry and Platform SRE Agent failures. Two severity-1 scheduled-query alert rules route to the operator-owned `AGOwner` action group, and Azure Monitor plus recipient inbox confirmation prove email delivery.
@@ -84,13 +95,14 @@ This checkpoint reflects the repo and deployment state as of 2026-09-07 and shou
 
 ### Post-v1 operational priorities
 
-1. **Operate the release**: Monitor outage alerts, connector health, investigation retention, and caller-policy refresh telemetry.
-2. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent deployment run.
+1. **Remediate assessment findings**: Implement WP9-WP12 and pass WP13 before recommending broader production rollout. This plan does not authorize deployment or production fault injection.
+2. **Operate the existing release**: Monitor outage alerts, connector health, investigation retention, and caller-policy refresh telemetry; healthy probes do not override the open findings.
+3. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent deployment run.
 
 ### Working assumptions for future work
 
 - The platform service remains the primary product; the workload SRE Agent remains a reference consumer example.
-- Azure Table Storage is actively deployed and validated for same-caller quota rejection, terminal slot reuse, cross-replica lifecycle access, restart safety, simultaneous independent callers, and reciprocal cross-caller denial.
+- Azure Table Storage is actively deployed, but prior sequential and lifecycle tests did not prove adversarial concurrent admission or injected-key isolation. WP10 reopens those guarantees while retaining the earlier restart and lifecycle evidence.
 - Future work starts from the tagged v1 contract and preserves backward compatibility for supported callers.
 
 ## Objective
@@ -101,12 +113,14 @@ The first supported caller boundary is same-tenant Microsoft Entra application i
 
 ## Execution Strategy
 
-Deliver the roadmap as eight reviewable work packages:
+The original roadmap consists of eight work packages, followed by five post-assessment packages:
 
 1. WP1-WP3 establish the public contract and portable transports.
 2. WP4-WP6 harden state, deployment, and the findings boundary.
 3. WP7 repositions the repository and adds generic examples.
 4. WP8 provides the release gate.
+5. WP9-WP11 remediate authorization, persistence/idempotency, and output/trust-boundary findings.
+6. WP12 hardens availability and deployment controls; WP13 revalidates the release, including image-risk disposition.
 
 Do not start production networking or repository-wide terminology changes before the shared contract and transport architecture are merged.
 
@@ -122,6 +136,8 @@ Do not start production networking or repository-wide terminology changes before
 - Existing MCP tool names and HTTP routes receive a compatibility window while v1 contracts are introduced.
 
 ## Review Findings
+
+The findings immediately below are the original pre-v1 review, retained for traceability. The current open assessment is recorded under **2026-09-11 Assessment: Remediation Backlog** after WP8.
 
 ### Release Blockers
 
@@ -376,7 +392,7 @@ Do not start production networking or repository-wide terminology changes before
 
 ### V1 Release Gate
 
-A v1 release is allowed only when all of the following are true:
+The following records the historical v1 release decision. It is not current security sign-off: the affected guarantees are reopened and must pass the post-assessment release gate below.
 
 - [x] Immutable redeployment preserves the Entra audience and existing caller grants. Verified on 2026-09-04 with the stable client ID, app role ID, five caller grants, and both connectors intact.
 - [x] Private Table access works under the target policy environment.
@@ -386,6 +402,136 @@ A v1 release is allowed only when all of the following are true:
 - [x] Multi-replica and restart tests preserve ownership and state. Two-replica lifecycle and in-flight rolling restart survival passed on 2026-09-01.
 - [x] Security scans pass or have explicitly accepted findings. CI gates dependency vulnerabilities, medium/high source findings, and fixable high/critical container findings; unfixed base-image advisories remain visible in Trivy reports, and low-severity non-cryptographic retry jitter is accepted.
 - [x] Manual log inspection finds no tokens, platform thread IDs, or unredacted sensitive findings. The 2026-09-07 audit found and removed `platform_thread_id` from `platform_thread_created`; regression coverage passes, the corrected immutable image is live, and sampled current-revision lifecycle logs contain no bearer/authorization material, SAS-like values, platform thread IDs, or report bodies.
+
+## 2026-09-11 Assessment: Remediation Backlog
+
+All tasks below are open. Preserve the original WP1-WP8 implementation history, but do not treat their checked boxes as current acceptance for the controls mapped here. Each future implementation must add a regression that fails on the reviewed baseline, then demonstrate the repaired behavior. Use synthetic secrets and isolated test resources; obtain explicit authorization before cloud changes or production probes.
+
+### Finding-to-Work-Item Map
+
+| Finding | Priority and evidence | New work | Earlier acceptance reopened |
+|---|---|---|---|
+| F01: Expired cached caller policy accepted after refresh failure | High; locally reproduced | P9.1, P9.3 | P5.13, P8.8 |
+| F02: Disabled/revoked caller can still read owned investigations | High; disabled-policy service probe | P9.2, P9.3 | P2.2, P5.3, P8.8 |
+| F03: MCP/legacy returns unvalidated intermediate text and sensitive fields | High; synthetic thread ID and AccountKey values survived | P11.1-P11.3 | P2.4, P6.3-P6.6, P8.8 |
+| F04: Wildcard Table ETags defeat quota/state concurrency | High; real SDK metadata and two-writer simulation | P10.1, P10.2, P10.6 | P4.2, P4.3, P8.8 |
+| F05: Idempotency lookup permits OData predicate injection | High; local query capture and foreign-record return, not live findings theft | P10.3, P10.6 | P3.4, P4.1, P8.8 |
+| F06: Nonatomic idempotency and uncertain POST replay | High operational risk; duplicate reservations and mocked POST retries | P10.4-P10.6 | P3.4, P4.2, P5.12, P8.8 |
+| F07: Readiness and dependency error semantics are misleading | Medium; local readiness/error probes | P12.1, P12.2 | P4.6, P5.12, P8.9 |
+| F08: Blocking SDK calls and unbounded summary-request amplification | Medium; source-review availability risk | P12.3, P12.4 | P5.8, P8.9 |
+| F09: Private thread IDs can enter request-path telemetry | Medium; source review | P11.4 | P6.7, P6.8, manual log gate |
+| F10: Per-caller platform-resource entitlement is undefined | Architectural risk; no demonstrated prompt-injection exploit | P11.5 | P1.5, P6.3, P7.2 |
+| F11: Unfixed image advisories lack explicit risk disposition | Scanner evidence; application exploitability unassessed | P13.2 | P8.4, security-scan gate |
+| F12: Production network/shared-key controls are not self-enforcing defaults | Deployment hardening gap; deployed tenant controls may differ | P12.5 | P5.5, P5.6 |
+
+## WP9: Restore Fail-Closed Caller Authorization
+
+**Goal:** Enforce fresh operator policy for every investigation operation, independently of an otherwise valid Entra token.
+
+**Priority:** High. **Dependencies:** None; recommended first implementation package.
+
+**Owning files:** [caller_policy.py](../escalation-proxy/app/caller_policy.py), [authorization.py](../escalation-proxy/app/authorization.py), [investigation_service.py](../escalation-proxy/app/investigation_service.py), [mcp_transport.py](../escalation-proxy/app/mcp_transport.py), and caller-policy/security tests.
+
+- [ ] P9.1 Enforce snapshot age on every policy access, including refresh-interval skips and last-known-good reads. A failed refresh must not make an expired snapshot usable on the next request. Preserve bounded refresh frequency and recovery after a valid snapshot becomes available.
+- [ ] P9.2 Check caller registration/enabled state in the shared service before create, idempotent replay, status, and summary access. Preserve independent token validation, ownership checks, and create-only severity admission. Disabled/missing policy must deny reads even for unexpired tokens containing `EscalationCaller`; no implicit break-glass read path.
+- [ ] P9.3 Add fake-clock and transport-level regressions for stale-cache boundaries, repeated requests during outages, refresh recovery, removed callers, disable/revoke with still-valid tokens, and re-enable. Exercise v1 HTTP, compatibility routes, and official MCP; verify rejection precedes upstream access.
+- [ ] P9.4 Document policy propagation and maximum-staleness guarantees, revoke versus token-expiry behavior, safe error mapping, and operational recovery. Update the contract and caller-administration guidance to match the verified behavior.
+
+### WP9 Acceptance Criteria
+
+- Reproduce the reviewed sequence: snapshot at t=100, failed refresh at t=401, maximum staleness 300 seconds, next request at t=402. Both requests deny; no refresh-interval bypass exists.
+- Within the documented policy propagation bound, disabling a caller blocks all owned reads and creates across transports. An independent enabled caller continues to work.
+- Missing/expired policy fails closed on every operation; a successful refresh restores access without restart. Tests cover the exact staleness boundary and repeated failures.
+
+## WP10: Repair Registry Isolation and Creation Idempotency
+
+**Goal:** Preserve caller isolation, accurate quotas, and one logical investigation under concurrent requests, replica failures, and uncertain upstream outcomes.
+
+**Priority:** High. **Dependencies:** P10.1-P10.2 precede atomic-idempotency implementation; integrate WP9 authorization before replay. WP10 must precede final WP12 retry-policy acceptance.
+
+**Owning files:** [investigation_registry.py](../escalation-proxy/app/investigation_registry.py), [investigation_service.py](../escalation-proxy/app/investigation_service.py), [platform_client.py](../escalation-proxy/app/platform_client.py), and registry/security tests.
+
+- [ ] P10.1 Read ETags from actual `TableEntity.metadata`, fail safely when a conditional mutation lacks an ETag, and remove wildcard fallbacks from quota/lifecycle/poll mutations. Handle the installed SDK's `TableTransactionError` status/error semantics as well as applicable entity conflicts; retry only genuine concurrency conflicts with bounded attempts and fresh reads.
+- [ ] P10.2 Audit admission, counter reconciliation, finalization, completion, release, polling, and expiry cleanup for lost updates. Use conditional same-partition transactions where needed; cleanup must not delete a concurrently renewed record. Keep counter/record transitions consistent and terminal release idempotent.
+- [ ] P10.3 Parameterize idempotency lookup rather than interpolating caller-controlled strings. Constrain lookup by authenticated caller partition and recheck returned ownership. Cover quote/operator injection, unexpected foreign rows, counter rows, and nonexpired record selection. Keep public errors opaque; do not claim foreign findings were stolen in the original assessment.
+- [ ] P10.4 Atomically claim a caller-scoped idempotency key with its canonical request fingerprint and quota reservation. Define an in-progress replay response before the upstream thread exists. Identical concurrent requests must resolve to one investigation; changed payloads conflict. Align memory and Table replay behavior for active, terminal, and retained records, including explicit key retention/expiry rules and old-row compatibility.
+- [ ] P10.5 Separate definitely failed creation from unknown outcomes. Do not blindly retry thread-creation POSTs or release reservations after response loss, cancellation, or registry-finalization failure. Verify upstream deduplication/reconciliation capability; if unavailable, persist a recoverable uncertain state and block duplicate creation pending bounded reconciliation/operator handling. Document crash recovery and orphan-thread disposition without promising unsupported exactly-once upstream execution.
+- [ ] P10.6 Add real-SDK-shaped entity and transaction-error tests, deterministic concurrent-writer barriers, fault injection, and an explicitly authorized isolated two-replica Table test. Cover shared and distinct keys, two callers, counter conflicts, timeout-after-commit, crash before/after upstream success, finalization failure, cleanup races, and restart recovery.
+
+### WP10 Acceptance Criteria
+
+- With quota one, simultaneous distinct-key requests admit at most one investigation and the persisted counter matches authoritative active reservations. Independent callers are not blocked by one another.
+- Two replicas using the same caller/key/payload expose one investigation and do not issue a second create while the first outcome is unknown. Changed payloads conflict; terminal replay works consistently in both backends.
+- SDK-deserialized metadata produces a real conditional ETag, not `*`; stale writes retry or fail safely with no lost update or double quota release.
+- Injected keys cannot alter caller scope, disclose foreign identifiers/state, or turn foreign fingerprints into an oracle. Test both repository lookup and public transport behavior.
+- Every uncertain creation remains discoverable for recovery with a documented quota policy. A local transaction alone is not accepted as proof of upstream exactly-once creation.
+
+## WP11: Enforce Findings, Telemetry, and Resource Trust Boundaries
+
+**Goal:** Return only finalized, validated, caller-authorized findings and prevent sensitive content from leaking through compatibility paths or logs.
+
+**Priority:** High for F03; medium telemetry hardening and an explicit architecture decision for F10. **Dependencies:** WP9 read authorization; coordinate persisted findings metadata with WP10.
+
+**Owning files:** [investigation_service.py](../escalation-proxy/app/investigation_service.py), [output_validation.py](../escalation-proxy/app/output_validation.py), [contracts.py](../escalation-proxy/app/contracts.py), [main.py](../escalation-proxy/app/main.py), [mcp_transport.py](../escalation-proxy/app/mcp_transport.py), [telemetry.py](../escalation-proxy/app/telemetry.py), [platform_client.py](../escalation-proxy/app/platform_client.py), and the platform liaison/architecture/threat-model documents.
+
+- [ ] P11.1 Put finalization, schema validation, and safe projection in the shared summary path used by official MCP, legacy MCP/HTTP, and v1 HTTP. Pending/running responses must not include intermediate agent prose. Malformed completed reports produce a safe contract error, not fallback raw text. Preserve wrappers only when their content satisfies this boundary; document intentional security-related compatibility changes.
+- [ ] P11.2 Strengthen finalization parsing to the documented report structure and final marker position; reject marker substrings embedded in evidence, incomplete sections, and mixed intermediate/final messages. Model output remains untrusted even when it has the marker. Emit only allowlisted fields with validated types.
+- [ ] P11.3 Extend defensive redaction/validation to complete connection strings, AccountKey and related credential forms, multiline/JSON content, signed URLs, and internal thread identifiers embedded in otherwise valid fields. Use structured parsing where applicable and reject unsafe output when needed; do not represent regex redaction as comprehensive data-loss prevention.
+- [ ] P11.4 Replace private thread-bearing request paths with route templates in telemetry; allowlist safe event fields and sanitize untrusted request IDs/methods and exception data. Audit success, retry, failure, and transport logging, not only `platform_thread_created`. Keep correlation via public investigation/correlation IDs without persisting report content.
+- [ ] P11.5 Decide and document whether callers share entitlement to all readable platform data or require per-caller resource restrictions. For restricted callers, enforce entitlements outside prompt text through trusted resource/tool scope and output checks; narrow platform RBAC as needed. If the upstream tool cannot enforce the required boundary, block that onboarding model. Update the threat model/ADR and add out-of-scope-resource and prompt-injection tests; delimiter escaping alone is insufficient evidence.
+- [ ] P11.6 Add a shared response/log corpus with synthetic credentials, private identifiers, forged markers, malformed reports, and intermediate messages across every transport. Include official-client and reference-connector compatibility checks against the controlled findings contract.
+
+### WP11 Acceptance Criteria
+
+- The reviewed intermediate-message example containing `platform_thread_id`, `AccountKey`, and semicolon-separated connection-string fields is never returned as findings.
+- All transports reject malformed final reports and expose only validated final fields; no pre-finalization prose escapes. Safe complete findings still work through the reference connector.
+- Captured logs for success and all failure/retry paths contain no synthetic secrets, private thread IDs, or report bodies, including identifiers embedded in request paths.
+- The supported caller-resource trust model has an explicit decision and enforceable tests. Cross-caller record ownership is not substituted for platform-resource authorization.
+
+## WP12: Bound Availability Risks and Enforce Deployment Controls
+
+**Goal:** Make readiness and failure responses truthful, bound request amplification, and make production safeguards reproducible without relying on tenant policy.
+
+**Priority:** Medium. **Dependencies:** WP9 policy health behavior; WP10 for creation retry semantics. Infrastructure changes and staging fault injection require separate deployment authorization.
+
+**Owning files:** [main.py](../escalation-proxy/app/main.py), [platform_client.py](../escalation-proxy/app/platform_client.py), [caller_policy.py](../escalation-proxy/app/caller_policy.py), [investigation_registry.py](../escalation-proxy/app/investigation_registry.py), [authorization.py](../escalation-proxy/app/authorization.py), [proxy infrastructure](../escalation-proxy/infrastructure/main.bicep), deployment scripts, monitoring definitions, and operations guidance.
+
+- [ ] P12.1 Make readiness check bounded platform authentication and non-mutating connectivity, registry availability, acceptable policy freshness, and relevant circuit state. Cache/coalesce dependency probes so public readiness cannot force unbounded App Configuration refreshes. Keep liveness independent of dependency outages.
+- [ ] P12.2 Map policy, registry, and platform unavailability to stable safe dependency codes with `503` and `retryable: true` where appropriate. Distinguish malformed output, caller errors, rate limits, and terminal investigation failure. Bound retry latency and retry only permitted transient failures; nonretryable 4xx responses must not loop through generic exception handling. Align HTTP/MCP guidance with WP10's uncertain-create contract.
+- [ ] P12.3 Move synchronous JWKS, managed-identity, App Configuration, and Table operations off the async event loop using supported async clients or bounded offloading. Preserve locks/transactions correctly, bound timeouts and concurrency, and reuse clients safely. Assess unknown-key JWKS refresh amplification without weakening signature verification.
+- [ ] P12.4 Apply bounded admission to summary retrieval as well as status, with per-caller and service-wide limits appropriate to multiple replicas. Bound request bytes before expensive processing, response/message retrieval volume, concurrent upstream calls, and execution time. Return safe retry guidance; prevent one caller from exhausting capacity needed by another caller or health probes.
+- [ ] P12.5 Make the production profile explicitly disable Storage shared-key and public-network access and require the private Table path. Evaluate App Configuration network access and required Entra/platform egress; document justified exceptions and dev-only opt-outs. Add IaC/default-parameter checks so a fresh subscription without restrictive policy remains secure; preserve existing stable identities and grants.
+- [ ] P12.6 Validate dependency outages/recovery, circuit transitions, retry classification, slow SDK calls, repeated readiness, oversized inputs, and summary bursts in isolated tests. Check alert predicates against real failure events and retain existing notification-delivery evidence separately from dependency-detection proof.
+
+### WP12 Acceptance Criteria
+
+- Simulated platform unreachability or an open dependency circuit yields readiness `503` within a documented budget; liveness remains available. Recovery restores readiness without restart.
+- Dependency responses carry the documented retryable code and no internal exception details. Nonretryable upstream errors are not retried; uncertain creates obey WP10.
+- Slow SDK responses and abusive summary/health traffic do not block the event loop or starve an independent caller within measured, documented limits.
+- Compiled production infrastructure enforces storage authentication/network controls without tenant-policy assistance; authorized staging verifies private DNS/egress and preserved identities.
+
+## WP13: Reopen Verification and Security Sign-Off
+
+**Goal:** Replace the previous green-suite inference with evidence covering the actual failure modes and explicit residual-risk decisions.
+
+**Priority:** Required release gate. **Dependencies:** WP9-WP12; image triage can begin independently.
+
+- [ ] P13.1 Add WP9-WP12 regressions to CI with both registry contracts, real SDK response/error shapes, deterministic concurrency/fault tests, and all public transports. Record baseline failures and repaired passes; dictionary-only ETag mocks and sequential idempotency tests are insufficient. Retain existing lint/type/security/build/schema gates.
+- [ ] P13.2 Rescan the exact candidate image digest, including unfixed vulnerabilities and applicable platforms. Triage the prior 51 HIGH/3 CRITICAL OS findings by advisory/package, reachability, privileges, and deployed configuration; distinguish scanner counts from unique vulnerabilities. Upgrade/rebuild where fixes exist. For residual findings record evidence, compensating controls, accountable owner, approval, review/expiry date, and rescan trigger. Do not silently equate `--ignore-unfixed` with risk acceptance.
+- [ ] P13.3 With separate authorization, validate the candidate in isolated private-Table staging with two replicas and two caller identities. Exercise revocation with unexpired tokens, query injection, simultaneous quota/key claims, uncertain-create recovery, restart, malformed findings, outage semantics, and safe telemetry. No destructive production probes.
+- [ ] P13.4 Reconcile the service contract, threat model, operations guide, release notes, and prior acceptance claims with observed behavior. Document compatibility changes, policy bounds, recovery procedures, caller trust assumptions, and residual risk without embedding secrets or raw findings in evidence.
+- [ ] P13.5 Record a finding-by-finding closure decision with commit/image digest, test commands/results, staging evidence where required, and reviewer/operator approval. Do not close a finding solely because the original 94 tests still pass. Plan any rollout/rollback separately; do not retag the reviewed release as though it contained the fixes.
+
+### Post-Assessment Release Gate
+
+Broader rollout is recommended only after this gate passes. Package task completion requires recorded evidence; explicit risk acceptance is required for any residual deployment/image risk, not an unchecked assumption.
+
+- [ ] F01-F06 remediated with baseline-failing regressions and successful repaired verification across the affected transports/backends.
+- [ ] F07-F09 and F12 controls validated, including bounded load/outage behavior, safe telemetry, and policy-independent production infrastructure.
+- [ ] F10 caller-resource trust decision approved and enforced for every supported onboarding model.
+- [ ] F11 candidate-digest scan complete; all HIGH/CRITICAL findings fixed or individually dispositioned with time-bounded owner approval and evidence.
+- [ ] Independent-caller, multi-replica, restart, uncertain-outcome, and reference-connector staging checks pass with no foreign data or synthetic-secret disclosure.
+- [ ] Documentation and compatibility guidance agree with tested behavior; closure record identifies reviewer, candidate commit/digest, and any residual limitations.
 
 ## Affected Files
 

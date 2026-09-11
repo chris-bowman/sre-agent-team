@@ -120,14 +120,16 @@ class RefreshingCallerPolicyStore:
         except ValueError:
             pass
 
-    def refresh(self, force: bool = False) -> None:
+    def refresh(self, force: bool = False) -> float:
         with self._lock:
             now = self._clock()
             if not force and now - self._last_refresh_attempt < self._refresh_interval_seconds:
-                return
+                return now
             self._last_refresh_attempt = now
             try:
                 setting = self._client.get_configuration_setting(key=self._key, label=self._label or None)
+                if setting is None:
+                    raise ValueError("Caller policy setting was not found")
                 if self._store is None or setting.etag != self._etag:
                     self._store = CallerPolicyStore.from_json(
                         setting.value or "",
@@ -149,20 +151,23 @@ class RefreshingCallerPolicyStore:
                 )
                 if not cache_is_usable:
                     raise ValueError("Caller policy is unavailable") from exc
+            return now
+
+    def _require_usable_snapshot(self, now: float) -> CallerPolicyStore:
+        if self._store is None:
+            raise ValueError("Caller policy is unavailable")
+        if now - self._last_success > self._maximum_staleness_seconds:
+            raise ValueError("Caller policy is unavailable")
+        return self._store
 
     def get(self, appid: str) -> CallerPolicy:
-        self.refresh()
-        if self._store is None:
-            raise ValueError("Caller policy is unavailable")
-        return self._store.get(appid)
+        now = self.refresh()
+        return self._require_usable_snapshot(now).get(appid)
 
     def authorize(self, appid: str, severity: str) -> CallerPolicy:
-        self.refresh()
-        if self._store is None:
-            raise ValueError("Caller policy is unavailable")
-        return self._store.authorize(appid, severity)
+        now = self.refresh()
+        return self._require_usable_snapshot(now).authorize(appid, severity)
 
     def health_check(self) -> None:
-        self.refresh(force=True)
-        if self._store is None:
-            raise ValueError("Caller policy is unavailable")
+        now = self.refresh(force=True)
+        self._require_usable_snapshot(now)

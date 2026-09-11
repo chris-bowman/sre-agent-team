@@ -148,6 +148,7 @@ resource registryStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (re
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
+    allowSharedKeyAccess: false
     allowBlobPublicAccess: false
     publicNetworkAccess: enablePrivateNetworking == 'true' ? 'Disabled' : 'Enabled'
     minimumTlsVersion: 'TLS1_2'

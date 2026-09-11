@@ -7,10 +7,10 @@ DEFAULT_REQUIRE_FINALIZATION_TOKEN = True
 EventSink = Callable[..., None]
 
 _SENSITIVE_VALUE_PATTERN = re.compile(
-    r"(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string)\s*[:=]\s*)([^\s,;]+)"
+    r"(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string|account[_-]?key|sharedaccesskey|platform[_-]?thread[_-]?id)\s*[:=]\s*)([^\s,;]+)"
 )
 _SENSITIVE_JSON_FIELD_PATTERN = re.compile(
-    r"""(?is)(["']?(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string)["']?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\]\s]+)"""
+    r"""(?is)(["']?(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|secret|connection[_-]?string|account[_-]?key|sharedaccesskey|platform[_-]?thread[_-]?id)["']?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,}\]\s]+)"""
 )
 _SENSITIVE_QUERY_PATTERN = re.compile(r"(?i)([?&](?:sig|token|access_token|api_key|client_secret)=)[^&#\s]+")
 
@@ -103,7 +103,12 @@ def is_finalized_summary(
     finalization_token: str = DEFAULT_FINALIZATION_TOKEN,
 ) -> bool:
     if require_finalization_token:
-        return finalization_token.lower() in (selected_text or "").lower()
+        return bool(
+            re.search(
+                rf"(?i)(?:^|\n)FINALIZATION_TOKEN:\s*{re.escape(finalization_token)}\s*\Z",
+                (selected_text or "").strip(),
+            )
+        )
     return best_score >= 40
 
 
@@ -112,7 +117,10 @@ def parse_finalized_findings(
     finalization_token: str = DEFAULT_FINALIZATION_TOKEN,
 ) -> dict[str, Any] | None:
     """Parse a final Markdown report into the public allowlisted schema."""
-    if finalization_token not in report:
+    if not re.search(
+        rf"(?i)(?:^|\n)FINALIZATION_TOKEN:\s*{re.escape(finalization_token)}\s*\Z",
+        report.strip(),
+    ):
         return None
 
     sections = {}

@@ -142,6 +142,18 @@ class InvestigationService:
         self._uuid_factory = uuid_factory
         self._fetch_status_once = fetch_status_once
 
+    def _authorize_read(self, caller: CallerIdentity) -> None:
+        try:
+            self._caller_policy_store.authorize(caller.appid, "low")
+        except ValueError as exc:
+            self._event_sink(
+                "investigation_access_denied",
+                outcome="denied",
+                reason="caller_policy",
+                caller_appid=caller.appid,
+            )
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     async def create_investigation(
         self,
         req: CreateInvestigationRequest,
@@ -367,6 +379,7 @@ class InvestigationService:
         return status
 
     async def get_status(self, req: GetInvestigationRequest, caller: CallerIdentity) -> dict[str, Any]:
+        self._authorize_read(caller)
         try:
             record = self._registry.get_investigation(req.investigation_id, caller.oid, caller.appid)
             self._registry.record_status_poll(req.investigation_id, caller.oid, caller.appid)
@@ -395,6 +408,7 @@ class InvestigationService:
         return {"investigation_id": req.investigation_id, "status": status, "progress": ""}
 
     async def get_summary(self, req: GetInvestigationRequest, caller: CallerIdentity) -> dict[str, Any]:
+        self._authorize_read(caller)
         try:
             record = self._registry.get_investigation(req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
@@ -411,16 +425,27 @@ class InvestigationService:
         ]
 
         if not agent_texts:
-            root_cause_analysis = "No investigation summary available yet. Please check status and retry."
-            status = "pending"
-            selection_strategy = "none"
-        else:
-            best_score, root_cause_analysis, selection_strategy = self._select_best_summary_text(agent_texts)
-            status = "completed" if self._is_finalized_summary(best_score, root_cause_analysis) else "running"
+            return RedactedSummaryResponse(
+                investigation_id=req.investigation_id,
+                status="pending",
+                summary="",
+            ).model_dump()
 
-        unredacted_root_cause_analysis = root_cause_analysis
-        root_cause_analysis = self._redact_sensitive_text(root_cause_analysis)
-        redaction_applied = root_cause_analysis != unredacted_root_cause_analysis
+        best_score, report, selection_strategy = self._select_best_summary_text(agent_texts)
+        if not self._is_finalized_summary(best_score, report):
+            return RedactedSummaryResponse(
+                investigation_id=req.investigation_id,
+                status="running",
+                summary="",
+            ).model_dump()
+
+        redacted_report = self._redact_sensitive_text(report)
+        redaction_applied = redacted_report != report
+        findings = self._parse_finalized_findings(redacted_report)
+        if not findings:
+            self._event_sink("findings_schema_rejected", investigation_id=req.investigation_id)
+            raise HTTPException(status_code=502, detail="Platform findings did not satisfy the required report format")
+        status = "completed"
 
         self._event_sink(
             "platform_thread_summary_retrieved",
@@ -432,34 +457,36 @@ class InvestigationService:
             requires_finalization_token=self._config.require_finalization_token,
             finalization_token=self._config.finalization_token,
         )
-        if status == "completed":
-            self._registry.complete_investigation(req.investigation_id, caller.appid, status)
-            findings_schema_valid = self._parse_finalized_findings(root_cause_analysis) is not None
-            self._registry.record_findings_metadata(
-                req.investigation_id,
-                caller.appid,
-                findings_schema_valid,
-                selection_strategy,
-                redaction_applied,
-            )
-            self._event_sink(
-                "investigation_terminal",
-                outcome=status,
-                investigation_id=req.investigation_id,
-                caller_appid=caller.appid,
-                findings_schema_valid=findings_schema_valid,
-                findings_selection_strategy=selection_strategy,
-                findings_redacted=redaction_applied,
-            )
-        return RedactedSummaryResponse(
+        self._registry.complete_investigation(req.investigation_id, caller.appid, status)
+        self._registry.record_findings_metadata(
+            req.investigation_id,
+            caller.appid,
+            True,
+            selection_strategy,
+            redaction_applied,
+        )
+        self._event_sink(
+            "investigation_terminal",
+            outcome=status,
             investigation_id=req.investigation_id,
-            status=status,
-            summary=root_cause_analysis,
-        ).model_dump()
+            caller_appid=caller.appid,
+            findings_schema_valid=True,
+            findings_selection_strategy=selection_strategy,
+            findings_redacted=redaction_applied,
+        )
+        return {
+            **RedactedSummaryResponse(
+                investigation_id=req.investigation_id,
+                status=status,
+                summary=findings["summary"],
+            ).model_dump(),
+            "findings": findings,
+        }
 
     def v1_lifecycle_response(
         self, investigation_id: str, status: str, caller: CallerIdentity
     ) -> InvestigationLifecycleResponse:
+        self._authorize_read(caller)
         try:
             record = self._registry.get_investigation(investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
@@ -482,10 +509,11 @@ class InvestigationService:
     def v1_findings_response(
         self, investigation_id: str, result: dict[str, Any], caller: CallerIdentity
     ) -> InvestigationFindingsResponse:
+        self._authorize_read(caller)
         if result.get("status") != "completed":
             raise HTTPException(status_code=409, detail="Investigation findings are not available yet")
 
-        findings = self._parse_finalized_findings(result.get("summary", ""))
+        findings = result.get("findings") or self._parse_finalized_findings(result.get("summary", ""))
         if not findings:
             self._event_sink("findings_schema_rejected", investigation_id=investigation_id)
             raise HTTPException(status_code=502, detail="Platform findings did not satisfy the required report format")

@@ -9,7 +9,7 @@ from typing import Any
 
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
-from azure.data.tables import TableServiceClient, UpdateMode
+from azure.data.tables import TableServiceClient, TableTransactionError, UpdateMode
 from azure.identity import DefaultAzureCredential
 
 import telemetry
@@ -308,7 +308,21 @@ class TableStorageInvestigationRegistry:
     @staticmethod
     def _entity_etag(entity: dict[str, Any]) -> str:
         """Read the SDK concurrency tag across TableEntity representations."""
-        return str(entity.get("etag") or entity.get("_etag") or "*")
+        metadata = getattr(entity, "metadata", None) or getattr(entity, "_metadata", None) or {}
+        etag = metadata.get("etag") or entity.get("etag") or entity.get("_etag")
+        if not etag:
+            raise ValueError("Table entity is missing an ETag for a conditional mutation")
+        return str(etag)
+
+    @staticmethod
+    def _escape_odata_string(value: str) -> str:
+        return value.replace("'", "''")
+
+    @staticmethod
+    def _is_concurrency_conflict(error: Exception) -> bool:
+        return isinstance(error, ResourceModifiedError) or (
+            isinstance(error, TableTransactionError) and getattr(error, "status_code", None) == 412
+        )
 
     def _get_or_create_quota_counter(self, caller_appid: str) -> dict[str, Any]:
         try:
@@ -507,7 +521,9 @@ class TableStorageInvestigationRegistry:
                     ]
                 )
                 return record.investigation_id
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_quota_counter_conflict", operation="reserve", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -602,7 +618,9 @@ class TableStorageInvestigationRegistry:
                     ]
                 )
                 return
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_investigation_conflict", operation="complete", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -672,12 +690,18 @@ class TableStorageInvestigationRegistry:
         return investigation_id
 
     def find_by_idempotency_key(self, caller_appid: str, idempotency_key: str) -> InvestigationRecord | None:
+        partition_key = self._escape_odata_string(self._partition_key(caller_appid))
+        escaped_key = self._escape_odata_string(idempotency_key)
         entities = self._table.query_entities(
-            query_filter=f"caller_appid eq '{caller_appid}' and idempotency_key eq '{idempotency_key}'"
+            query_filter=(f"PartitionKey eq '{partition_key}' and idempotency_key eq '{escaped_key}'")
         )
         for entity in entities:
             record = self._from_entity(entity)
-            if time.time() <= record.expires_at:
+            if (
+                record.caller_appid == caller_appid
+                and record.workload_identity_appid == caller_appid
+                and time.time() <= record.expires_at
+            ):
                 return record
         return None
 

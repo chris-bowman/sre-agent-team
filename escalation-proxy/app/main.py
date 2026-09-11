@@ -185,6 +185,8 @@ _V1_PROBLEM_CODES = {
     404: ("investigation_not_found", "Investigation not found", False),
     409: ("conflict", "Request conflicts with current investigation state", False),
     429: ("quota_exceeded", "Request limit exceeded", True),
+    502: ("invalid_platform_response", "Platform response was invalid", False),
+    503: ("platform_unavailable", "Platform service is temporarily unavailable", True),
 }
 
 

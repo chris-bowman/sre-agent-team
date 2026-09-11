@@ -16,10 +16,10 @@ class ContractModel(BaseModel):
 
 
 class CreateInvestigationV1Request(ContractModel):
-    description: str = Field(min_length=1)
-    caller_label: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=5000)
+    caller_label: str = Field(min_length=1, max_length=256)
     severity: Severity = "medium"
-    context: str = ""
+    context: str = Field(default="", max_length=10000)
 
 
 class V1StatusRequest(ContractModel):

@@ -22,6 +22,7 @@ import httpx
 import jwt as pyjwt
 import pytest
 from azure.core.exceptions import ResourceNotFoundError
+from azure.data.tables._deserialize import _convert_to_entity
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from mcp import ClientSession
@@ -557,6 +558,18 @@ async def test_platform_request_retries_transient_status_before_success():
     assert get.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_platform_request_does_not_retry_uncertain_post():
+    with patch(
+        "platform_client.httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=httpx.ReadTimeout("response lost")
+    ) as post:
+        with pytest.raises(HTTPException) as exc:
+            await _platform_request("POST", "/threads", "platform-token", json={"StartMessage": {"Text": "test"}})
+
+    assert exc.value.status_code == 503
+    assert post.await_count == 1
+
+
 def test_platform_circuit_breaker_rejects_requests_while_open():
     breaker = PlatformCircuitBreaker(failure_threshold=2, recovery_seconds=30)
 
@@ -581,6 +594,34 @@ def test_platform_circuit_breaker_closes_after_successful_probe():
     breaker.before_request()
 
 
+@pytest.mark.asyncio
+async def test_platform_request_logs_route_template_not_private_thread_id():
+    success = MagicMock(status_code=200)
+    success.raise_for_status = MagicMock()
+    with (
+        patch("platform_client.httpx.AsyncClient.get", new_callable=AsyncMock, return_value=success),
+        patch("platform_client.log_event") as event,
+    ):
+        await _platform_request("GET", "/threads/private-thread-id/messages", "platform-token")
+
+    assert event.call_args.kwargs["path"] == "/threads/{thread_id}/messages"
+
+
+def test_v1_dependency_error_is_retryable_and_safe(client):
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+
+    with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
+        with patch("main._get_status_impl", new_callable=AsyncMock, side_effect=HTTPException(status_code=503)):
+            response = client.get(
+                "/api/v1/investigations/f57afdb4-348f-40aa-b29d-886f4bce5332",
+                headers={"Authorization": "Bearer ignored"},
+            )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "platform_unavailable"
+    assert response.json()["retryable"] is True
+
+
 def test_registry_idempotency_replays_matching_request_and_rejects_conflict(registry):
     first_id = registry.create_investigation(
         caller_oid="oid1",
@@ -598,6 +639,38 @@ def test_registry_idempotency_replays_matching_request_and_rejects_conflict(regi
     assert existing.investigation_id == first_id
     assert existing.request_fingerprint == "fingerprint-1"
     assert registry.find_by_idempotency_key("appid2", "request-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["status", "summary"])
+async def test_disabled_caller_cannot_read_investigation(registry, operation):
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="low",
+    )
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    request = GetInvestigationRequest(investigation_id=investigation_id)
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch(
+            "main._caller_policy_store.authorize",
+            side_effect=ValueError("Caller is disabled for the escalation service"),
+        ),
+        patch("main._platform_request", new_callable=AsyncMock) as platform_request,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            if operation == "status":
+                await _get_status_impl(request, caller)
+            else:
+                await _get_summary_impl(request, caller)
+
+    assert exc.value.status_code == 403
+    platform_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -669,7 +742,16 @@ async def test_finalized_summary_releases_quota_slot(registry):
             "value": [
                 {
                     "author": {"role": "SREAgent"},
-                    "text": "Investigation complete.\nFINALIZATION_TOKEN: ESCALATION_FINAL_V1",
+                    "text": """## Platform Investigation Findings
+### Root Cause
+Route configuration changed.
+### Evidence
+- Route table no longer contains the approved route.
+### Recommended Actions
+1. Restore the approved route.
+### Verdict
+PLATFORM ISSUE
+FINALIZATION_TOKEN: ESCALATION_FINAL_V1""",
                 }
             ]
         },
@@ -687,7 +769,7 @@ async def test_finalized_summary_releases_quota_slot(registry):
     assert completed.reservation_state == "completed"
     assert completed.completed_at > 0
     assert completed.findings_finalized_at > 0
-    assert not completed.findings_schema_valid
+    assert completed.findings_schema_valid
     assert completed.findings_selection_strategy == "best_structured_message"
     assert not completed.findings_redacted
     registry.reserve_investigation(
@@ -873,6 +955,56 @@ def test_table_registry_entity_round_trip_preserves_security_fields():
     entity["etag"] = "etag-1"
     restored = TableStorageInvestigationRegistry._from_entity(entity)
     assert restored == record
+
+
+def test_table_registry_reads_conditional_etag_from_sdk_metadata():
+    entity = _convert_to_entity(
+        {
+            "PartitionKey": "appid1",
+            "RowKey": "investigation1",
+            "odata.etag": 'W/"sdk-etag"',
+        }
+    )
+
+    assert entity.metadata["etag"] == 'W/"sdk-etag"'
+    assert TableStorageInvestigationRegistry._entity_etag(entity) == 'W/"sdk-etag"'
+
+
+def test_table_registry_rejects_missing_etag_for_conditional_mutation():
+    with pytest.raises(ValueError, match="missing an ETag"):
+        TableStorageInvestigationRegistry._entity_etag({"PartitionKey": "appid1", "RowKey": "investigation1"})
+
+
+def test_table_idempotency_lookup_escapes_key_and_rejects_foreign_record():
+    class FakeTable:
+        def __init__(self):
+            self.query_filter = ""
+
+        def query_entities(self, query_filter):
+            self.query_filter = query_filter
+            return [
+                {
+                    "RowKey": "foreign-investigation",
+                    "caller_oid": "victim-oid",
+                    "caller_appid": "victim",
+                    "workload_name": "victim-workload",
+                    "workload_identity_appid": "victim",
+                    "platform_thread_id": "private-thread",
+                    "severity": "low",
+                    "created_at": time.time(),
+                    "expires_at": time.time() + 300,
+                }
+            ]
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+
+    record = registry.find_by_idempotency_key("attacker", "key' or caller_appid eq 'victim")
+
+    assert record is None
+    assert registry._table.query_filter == (
+        "PartitionKey eq 'attacker' and idempotency_key eq 'key'' or caller_appid eq ''victim'"
+    )
 
 
 def test_table_registry_old_entity_uses_metadata_defaults():
@@ -1329,7 +1461,7 @@ def test_v1_findings_rejects_malformed_completed_report():
 
     assert response.status_code == 502
     assert response.headers["content-type"].startswith("application/problem+json")
-    assert response.json()["code"] == "internal_error"
+    assert response.json()["code"] == "invalid_platform_response"
 
 
 def test_readiness_check_reports_dependency_failure_without_details():

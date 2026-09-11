@@ -78,6 +78,33 @@ def test_refreshing_policy_store_fails_closed_after_maximum_staleness():
         store.authorize("caller", "high")
 
 
+def test_refreshing_policy_store_rejects_expired_snapshot_after_throttled_failed_refresh():
+    clock = MagicMock(side_effect=[100.0, 401.0, 402.0, 402.0])
+    client = MagicMock()
+    client.get_configuration_setting.side_effect = [
+        SimpleNamespace(value='[{"appid":"caller","enabled":true}]', etag="one"),
+        RuntimeError("unavailable"),
+    ]
+    store = RefreshingCallerPolicyStore(
+        endpoint="https://config.example",
+        key="policy",
+        label="production",
+        default_quota=2,
+        refresh_interval_seconds=30,
+        maximum_staleness_seconds=300,
+        event_sink=MagicMock(),
+        client=client,
+        clock=clock,
+    )
+
+    with pytest.raises(ValueError, match="Caller policy is unavailable"):
+        store.authorize("caller", "low")
+    with pytest.raises(ValueError, match="Caller policy is unavailable"):
+        store.authorize("caller", "low")
+
+    assert client.get_configuration_setting.call_count == 2
+
+
 def test_configured_policy_rejects_disabled_and_unregistered_callers():
     store = CallerPolicyStore.from_json(
         '[{"appid":"caller-disabled","enabled":false,"maximum_concurrent_investigations":1}]',

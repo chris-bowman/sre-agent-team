@@ -70,6 +70,12 @@ def test_request_problem_and_registration_constraints_are_enforced():
     assert request.severity == "medium"
 
     with pytest.raises(ValidationError):
+        CreateInvestigationV1Request(description="x" * 5001, caller_label="payments-prod")
+
+    with pytest.raises(ValidationError):
+        CreateInvestigationV1Request(description="valid", caller_label="x" * 257)
+
+    with pytest.raises(ValidationError):
         ProblemDetails(
             type="urn:problem:quota",
             title="Quota exceeded",

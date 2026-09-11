@@ -68,6 +68,16 @@ _platform_circuit_breaker = PlatformCircuitBreaker(
 )
 
 
+def _telemetry_path(path: str) -> str:
+    if path == "/threads":
+        return path
+    if path.endswith("/messages"):
+        return "/threads/{thread_id}/messages"
+    if path.startswith("/threads/"):
+        return "/threads/{thread_id}"
+    return "/unknown"
+
+
 def get_platform_agent_token() -> str:
     """Acquire a token for the platform SRE agent using managed identity."""
     token: AccessToken = mi_credential.get_token(SRE_AGENT_SCOPE)
@@ -79,6 +89,7 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
     _platform_circuit_breaker.before_request()
     started_at = time.monotonic()
     retryable_statuses = {429, 500, 502, 503, 504}
+    retryable_method = method.upper() in {"GET", "HEAD", "OPTIONS"}
     last_error: Exception | None = None
     for attempt in range(PLATFORM_REQUEST_MAX_ATTEMPTS):
         try:
@@ -96,7 +107,7 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
                     "platform_request_completed",
                     outcome="success",
                     method=method,
-                    path=path,
+                    path=_telemetry_path(path),
                     status_code=response.status_code,
                     attempts=attempt + 1,
                     duration_ms=round((time.monotonic() - started_at) * 1000),
@@ -108,15 +119,17 @@ async def _platform_request(method: str, path: str, token: str, **kwargs: Any) -
         except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
             last_error = exc
 
-        if attempt + 1 < PLATFORM_REQUEST_MAX_ATTEMPTS:
+        if retryable_method and attempt + 1 < PLATFORM_REQUEST_MAX_ATTEMPTS:
             await asyncio.sleep((0.25 * (2**attempt)) + random.uniform(0, 0.1))
+            continue
+        break
 
     _platform_circuit_breaker.record_failure()
     log_event(
         "platform_request_failed",
         outcome="failure",
         method=method,
-        path=path,
+        path=_telemetry_path(path),
         attempts=PLATFORM_REQUEST_MAX_ATTEMPTS,
         duration_ms=round((time.monotonic() - started_at) * 1000),
     )

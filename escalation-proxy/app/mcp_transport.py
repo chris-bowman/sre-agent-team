@@ -88,10 +88,10 @@ def create_mcp_app():
     @server.tool()
     async def create_platform_investigation(
         description: str,
+        idempotency_key: str,
         caller_label: str = "",
         severity: str = "medium",
         context: str = "",
-        idempotency_key: str = "",
         workload_name: str = "",
     ) -> dict[str, Any]:
         """Create an investigation through the Platform Escalation Service."""

@@ -25,6 +25,14 @@ def test_redact_sensitive_text_masks_values_and_notifies_optional_sink():
     event_sink.assert_called_once_with("findings_redacted")
 
 
+def test_redact_sensitive_text_masks_account_keys_and_internal_thread_ids():
+    result = redact_sensitive_text("platform_thread_id=internal-thread;AccountKey=first-key;AccountKey=second-key")
+
+    assert "internal-thread" not in result
+    assert "first-key" not in result
+    assert "second-key" not in result
+
+
 def test_redact_sensitive_text_does_not_notify_when_unchanged():
     event_sink = MagicMock()
 
@@ -65,7 +73,13 @@ def test_finalized_summary_uses_explicit_token_requirement():
 
     assert not is_finalized_summary(score, structured)
     assert is_finalized_summary(score, structured, require_finalization_token=False)
-    assert is_finalized_summary(0, "CUSTOM_FINAL", finalization_token="CUSTOM_FINAL")
+    assert is_finalized_summary(0, "FINALIZATION_TOKEN: CUSTOM_FINAL", finalization_token="CUSTOM_FINAL")
+    assert not is_finalized_summary(0, "Evidence mentions CUSTOM_FINAL", finalization_token="CUSTOM_FINAL")
+    assert not is_finalized_summary(
+        0,
+        "FINALIZATION_TOKEN: CUSTOM_FINAL\nUntrusted content follows.",
+        finalization_token="CUSTOM_FINAL",
+    )
 
 
 def test_parse_finalized_findings_preserves_public_schema():

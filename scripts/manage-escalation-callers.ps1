@@ -256,6 +256,25 @@ function Initialize-CallerPolicies {
     return $initialized
 }
 
+function Resolve-AllowedResourceGroupIds {
+    param([Parameter(Mandatory)] [string[]] $ResourceGroups)
+
+    $resolved = @()
+    foreach ($resourceGroup in $ResourceGroups) {
+        if ([string]::IsNullOrWhiteSpace($resourceGroup)) { continue }
+        if ($resourceGroup -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+$') {
+            $resolved += $resourceGroup.ToLowerInvariant()
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
+            throw "SubscriptionId is required when AllowedResourceGroup '$resourceGroup' is a name rather than a resource ID."
+        }
+        $resource = Invoke-AzJson -Arguments @('group', 'show', '--name', $resourceGroup, '--subscription', $SubscriptionId)
+        $resolved += $resource.id.ToLowerInvariant()
+    }
+    return @($resolved | Select-Object -Unique)
+}
+
 $EntraAppId = Resolve-Value -Provided $EntraAppId -StateKey 'ProxyEntraClientId'
 $SubscriptionId = Resolve-Value -Provided $SubscriptionId -StateKey 'ProxySubscriptionId'
 $ResourceGroup = Resolve-Value -Provided $ResourceGroup -StateKey 'ProxyResourceGroup'
@@ -326,7 +345,7 @@ if ($Operation -eq 'List') {
 $callerServicePrincipal = Get-CallerServicePrincipal -PrincipalId $CallerPrincipalId
 $callerAssignments = @($assignments | Where-Object principalId -eq $callerServicePrincipal.id)
 $callerPolicy = @($policies | Where-Object appid -eq $callerServicePrincipal.appId) | Select-Object -First 1
-$resolvedAllowedResourceGroups = if ($resourceGroupsSpecified) {
+[string[]] $resolvedAllowedResourceGroups = if ($resourceGroupsSpecified) {
     @(Resolve-AllowedResourceGroupIds -ResourceGroups $AllowedResourceGroup)
 } elseif ($null -ne $callerPolicy) {
     @($callerPolicy.allowed_resource_groups)
@@ -442,23 +461,4 @@ if ($Operation -eq 'Revoke') {
     } else {
         Write-Host "Caller '$($callerServicePrincipal.displayName)' is revoked with a disabled policy tombstone." -ForegroundColor Green
     }
-}
-
-function Resolve-AllowedResourceGroupIds {
-    param([Parameter(Mandatory)] [string[]] $ResourceGroups)
-
-    $resolved = @()
-    foreach ($resourceGroup in $ResourceGroups) {
-        if ([string]::IsNullOrWhiteSpace($resourceGroup)) { continue }
-        if ($resourceGroup -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+$') {
-            $resolved += $resourceGroup.ToLowerInvariant()
-            continue
-        }
-        if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
-            throw "SubscriptionId is required when AllowedResourceGroup '$resourceGroup' is a name rather than a resource ID."
-        }
-        $resource = Invoke-AzJson -Arguments @('group', 'show', '--name', $resourceGroup, '--subscription', $SubscriptionId)
-        $resolved += $resource.id.ToLowerInvariant()
-    }
-    return @($resolved | Select-Object -Unique)
 }

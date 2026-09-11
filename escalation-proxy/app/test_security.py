@@ -1191,16 +1191,23 @@ def test_table_reservation_submits_counter_and_reservation_transaction():
         workload_identity_appid="appid1",
         severity="high",
         maximum_investigations=1,
+        idempotency_key="request-1",
+        request_fingerprint="fingerprint-1",
     )
 
     operations = registry._table.operations
     assert investigation_id
-    assert len(operations) == 2
+    assert len(operations) == 3
     assert operations[0][0] == "update"
     assert operations[0][1]["active_count"] == 1
     assert operations[1][0] == "create"
     assert operations[1][1]["PartitionKey"] == "appid1"
     assert operations[1][1]["reservation_state"] == "reserved"
+    assert operations[2][0] == "create"
+    assert operations[2][1]["PartitionKey"] == "appid1"
+    assert operations[2][1]["RowKey"] == registry._idempotency_index_key("request-1")
+    assert operations[2][1]["investigation_id"] == investigation_id.investigation_id
+    assert operations[2][1]["request_fingerprint"] == "fingerprint-1"
 
 
 def test_table_completion_atomically_releases_quota_slot():

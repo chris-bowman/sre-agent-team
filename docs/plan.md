@@ -2,8 +2,8 @@
 
 ## Status
 
-- Overall: Fresh-tenant production Table-backed deployment is healthy and the workload escalation smoke passed end to end
-- Current work package: WP8 release hardening - alert delivery evidence
+- Overall: All v1 work packages and release gates are complete; the fresh-tenant production deployment is healthy
+- Current work package: v1.0.0 released; post-v1 operations
 - Last updated: 2026-09-11
 - Primary product: Platform SRE Agent and least-privilege escalation proxy
 - Reference consumer: Workload SRE Agent
@@ -74,24 +74,24 @@ This checkpoint reflects the repo and deployment state as of 2026-09-07 and shou
 - **Private networking fully configured**: VNet (10.42.0.0/16), Container Apps subnet (10.42.0.0/27), Storage PE subnet (10.42.1.0/28), NAT Gateway, private DNS zone
 - **Production deployment path validated**: Bicep, Azure RBAC, private endpoint provisioning, and Storage SDK initialization all working under policy-restricted storage account
 
-### Still open / release-gated
+### Release gate status
 
 - **Caller administration and negative authorization**: Complete; independent-caller isolation, reciprocal cross-caller denial, simultaneous lifecycle, same-caller quota, terminal release, cross-replica access, restart survival, disabled/revoked callers, live idempotency, and severity-limit enforcement are validated.
 - **Official MCP conformance**: Complete; official-client tests cover negotiation, reconnect behavior, malformed requests, authorization failures, and all supported tool paths.
-- **Outage behavior**: Readiness, retries, safe public errors, and recovery were validated for registry and Platform SRE Agent failures. Two scheduled-query alert rules are deployed; notification routing and delivered-alert evidence remain open because no operator-owned action group exists.
+- **Outage behavior**: Complete; readiness, retries, safe public errors, and recovery were validated for registry and Platform SRE Agent failures. Two severity-1 scheduled-query alert rules route to the operator-owned `AGOwner` action group, and Azure Monitor plus recipient inbox confirmation prove email delivery.
 - **Immutable image/release controls**: Complete; deployment resolves the pushed tag to a validated ACR digest, the base image is digest-pinned, and all runtime packages are exact-pinned.
 - **Repository governance files and CI/security checks**: MIT license, contribution guide, security policy, code of conduct, changelog, operations guidance, CI checks, and image scanning are implemented.
 
-### Highest-priority next actions for the next session
+### Post-v1 operational priorities
 
-1. **Alert delivery gate (P8.9)**: Provide an operator-owned Azure Monitor action group, connect the deployed outage rules, and prove notification delivery.
-2. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent full deployment run.
+1. **Operate the release**: Monitor outage alerts, connector health, investigation retention, and caller-policy refresh telemetry.
+2. **Authentication maintenance**: Refresh the interactive Azure CLI sign-in before the next Graph-dependent deployment run.
 
 ### Working assumptions for future work
 
 - The platform service remains the primary product; the workload SRE Agent remains a reference consumer example.
 - Azure Table Storage is actively deployed and validated for same-caller quota rejection, terminal slot reuse, cross-replica lifecycle access, restart safety, simultaneous independent callers, and reciprocal cross-caller denial.
-- Future work should finish deployed alert-delivery evidence.
+- Future work starts from the tagged v1 contract and preserves backward compatibility for supported callers.
 
 ## Objective
 
@@ -371,7 +371,7 @@ Do not start production networking or repository-wide terminology changes before
 - [x] P8.6 Remove generated ARM JSON from source control; Bicep source is authoritative and templates are rebuilt during validation.
 - [x] P8.7 Add a staging end-to-end test with two independent caller identities. Overlapping WorkloadApp and WorkloadIsolation investigations completed on separate caller partitions on 2026-09-01, and a fresh simultaneous two-caller smoke passed after restoration on 2026-09-04.
 - [x] P8.8 Test cross-caller denial, disabled/revoked callers, idempotency, severity, quotas, restart survival, and multi-replica access. Reciprocal cross-caller denial, same-caller quota-one rejection, terminal release/reuse, restart survival, and multi-replica access passed. On 2026-09-04, a five-caller allowlist was activated; both workload agents completed positive-path escalations, WorkloadIsolation was denied while disabled and again after revoke, WorkloadApp remained authorized as the control, re-grant recovery succeeded, and all five callers were restored on healthy revision `sre-escalation-proxy--0000020`. On 2026-09-07, the WorkloadApp connector replayed an identical request under the same idempotency key, rejected a changed payload under that key, and denied a high-severity request while its policy ceiling was temporarily set to low without admitting an investigation. The exact five-caller policy snapshot was restored with ETag protection; all four health endpoints returned `200`, and both replicas remained ready.
-- [x] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts. Dependency-aware readiness, bounded retry/circuit-breaker behavior, safe `503` responses, and genuine recovery were validated on 2026-09-07. On 2026-09-11, the fresh tenant deployed enabled severity-1 five-minute scheduled-query rules for policy/readiness and Platform SRE Agent dependency failures. Both rules target `sre-escalation-proxy-logs`, use the expected structured-event predicates, and route to the operator-owned `AGOwner` action group. An Azure Monitor Log Alert V2 test completed at `2026-09-11T02:12:48Z`; its enabled `chbowm@microsoft.com` email action reported `Succeeded`.
+- [x] P8.9 Test registry and Platform SRE Agent outages against readiness, retries, public errors, metrics, and alerts. Dependency-aware readiness, bounded retry/circuit-breaker behavior, safe `503` responses, and genuine recovery were validated on 2026-09-07. On 2026-09-11, the fresh tenant deployed enabled severity-1 five-minute scheduled-query rules for policy/readiness and Platform SRE Agent dependency failures. Both rules target `sre-escalation-proxy-logs`, use the expected structured-event predicates, and route to the operator-owned `AGOwner` action group. An Azure Monitor Log Alert V2 test completed at `2026-09-11T02:12:48Z`; its enabled `chbowm@microsoft.com` email action reported `Succeeded`, and the recipient confirmed inbox delivery.
 - [x] P8.10 Verify Azure SRE Agent reference connector compatibility. The fresh WorkloadApp connector completed the create/status/findings lifecycle in staging on 2026-08-27. After the 2026-09-07 runtime recovery, the connector was restored to `Connected`, healthy, with three tools. A fresh WorkloadApp-originated smoke then selected `workload-escalation-parent`, delegated to `platform-escalation`, and completed the create/status/findings lifecycle with a structured final report and no resource modifications. On 2026-09-11, the newly deployed tenant completed investigation `05b25764-3622-4c8a-9b83-a282ba1ffe5a` with correlation ID `e6b9f365-e0ed-4998-957e-2cf99a2b96ea`: create returned pending, the first status poll returned completed, and summary returned structured findings schema v1.0 with the test correctly classified as no platform issue. The platform agent also discovered the scoped `workload-rg` agent, Application Insights, Log Analytics workspace, and managed identity resources in `australiaeast`.
 
 ### V1 Release Gate
@@ -424,9 +424,8 @@ A v1 release is allowed only when all of the following are true:
 
 ## Deferred Decisions
 
-1. Repository license selection remains an owner decision before public release.
-2. APIM may later provide centralized governance and analytics but is not required for v1.
-3. Cross-tenant callers require a separate design because they change issuer validation, tenant allowlisting, onboarding, abuse controls, and support obligations.
+1. APIM may later provide centralized governance and analytics but is not required for v1.
+2. Cross-tenant callers require a separate design because they change issuer validation, tenant allowlisting, onboarding, abuse controls, and support obligations.
 
 ## Decision Log
 

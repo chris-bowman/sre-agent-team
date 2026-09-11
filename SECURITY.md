@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the current `main` branch. Released versions are supported only when explicitly listed in release notes.
+Security fixes are applied to the current `main` branch and the latest `1.0.x` release.
 
 ## Reporting a vulnerability
 

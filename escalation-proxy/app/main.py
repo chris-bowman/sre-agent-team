@@ -196,6 +196,10 @@ validate_requested_severity = _caller_authorization.validate_requested_severity
 extract_and_validate_token = _caller_authorization.extract_and_validate_token
 
 
+async def _authenticate_request(authorization: str | None):
+    return await _run_blocking_sdk_call(extract_and_validate_token, authorization)
+
+
 class RequestBodyLimitMiddleware:
     def __init__(self, app, maximum_bytes: int) -> None:
         self.app = app
@@ -525,7 +529,7 @@ async def mcp_handler(body: McpRequest, authorization: str = Header(None)):
         requires_auth = body.method == "tools/call"
         caller = None
         if requires_auth:
-            _token, caller = extract_and_validate_token(authorization)
+            _token, caller = await _authenticate_request(authorization)
 
         if body.method == "initialize":
             return _mcp_result(
@@ -636,7 +640,7 @@ async def create_investigation(
     """
     response.headers["Deprecation"] = "true"
     response.headers["Link"] = '</api/v1/investigations>; rel="successor-version"'
-    _token, caller = extract_and_validate_token(authorization)
+    _token, caller = await _authenticate_request(authorization)
     return await _create_investigation_impl(req, caller)
 
 
@@ -647,7 +651,7 @@ async def create_investigation_v1(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ):
     """Create an investigation using the versioned HTTP contract."""
-    _token, caller = extract_and_validate_token(authorization)
+    _token, caller = await _authenticate_request(authorization)
     legacy_request = CreateInvestigationRequest(
         description=req.description,
         workload_name=req.caller_label,
@@ -682,7 +686,7 @@ async def get_status(
     """
     response.headers["Deprecation"] = "true"
     response.headers["Link"] = '</api/v1/investigations/{investigation_id}>; rel="successor-version"'
-    _token, caller = extract_and_validate_token(authorization)
+    _token, caller = await _authenticate_request(authorization)
     return await _get_status_impl(req, caller)
 
 
@@ -693,7 +697,7 @@ async def get_investigation_v1(
     authorization: str = Header(None),
 ):
     """Get an investigation lifecycle state using the versioned HTTP contract."""
-    _token, caller = extract_and_validate_token(authorization)
+    _token, caller = await _authenticate_request(authorization)
     result = await _get_status_impl(
         GetInvestigationRequest(investigation_id=investigation_id, wait_seconds=wait_seconds),
         caller,
@@ -710,7 +714,7 @@ async def get_investigation_findings_v1(
     authorization: str = Header(None),
 ):
     """Get validated findings for a completed investigation."""
-    _token, caller = extract_and_validate_token(authorization)
+    _token, caller = await _authenticate_request(authorization)
     result = await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
     return await _v1_findings_response(investigation_id, result, caller)
 
@@ -734,7 +738,7 @@ async def get_summary(
     """
     response.headers["Deprecation"] = "true"
     response.headers["Link"] = '</api/v1/investigations/{investigation_id}/findings>; rel="successor-version"'
-    _token, caller = extract_and_validate_token(authorization)
+    _token, caller = await _authenticate_request(authorization)
     return await _get_summary_impl(req, caller)
 
 

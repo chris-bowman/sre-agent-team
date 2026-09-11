@@ -38,10 +38,10 @@ class CallerAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.method in {"POST", "GET"}:
             authorization = request.headers.get("authorization")
-            from main import extract_and_validate_token
+            from main import _authenticate_request
 
             try:
-                _token, caller = extract_and_validate_token(authorization)
+                _token, caller = await _authenticate_request(authorization)
             except HTTPException as exc:
                 return JSONResponse(
                     status_code=exc.status_code,

@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The project follows Kee
 ### Security
 
 - Platform-owned findings are reduced to a caller-safe platform-team handoff.
+- All verdicts now use fixed proxy-authored caller responses; model-generated diagnostic text remains in the platform-owned thread.
 - The runtime image now uses a pinned, patched Alpine base. The exact deployed candidate digest has zero HIGH/CRITICAL Trivy findings and the pinned Python dependency graph passes `pip-audit`.
 
 ## [1.0.0] - 2026-09-11

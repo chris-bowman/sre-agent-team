@@ -538,14 +538,25 @@ class InvestigationService:
 
     @staticmethod
     def _public_findings(findings: dict[str, Any]) -> dict[str, Any]:
-        if findings.get("impact", "").strip().upper() != "PLATFORM ISSUE":
-            return findings
+        verdict = findings.get("impact", "").strip().upper()
+        if verdict == "PLATFORM ISSUE":
+            summary = (
+                "A platform issue was identified. Please engage the platform team for investigation and remediation."
+            )
+            action = "Engage the platform team's on-call or support process."
+        elif verdict == "APPLICATION ISSUE":
+            summary = "No platform issue was identified. Continue investigation within the authorized workload resource group."
+            action = "Engage the workload team's on-call or support process."
+        else:
+            verdict = "INCONCLUSIVE"
+            summary = "The platform investigation was inconclusive. Engage the platform team for next steps."
+            action = "Engage the platform team's on-call or support process."
         return {
-            "summary": "A platform issue was identified. Please engage the platform team for investigation and remediation.",
-            "impact": "PLATFORM ISSUE",
+            "summary": summary,
+            "impact": verdict,
             "evidence": [],
             "likely_causes": [],
-            "recommended_actions": ["Engage the platform team's on-call or support process."],
+            "recommended_actions": [action],
             "limitations": ["Platform investigation details are restricted to the platform team."],
         }
 

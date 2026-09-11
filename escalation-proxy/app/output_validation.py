@@ -148,6 +148,9 @@ def parse_finalized_findings(
     verdict = " ".join(lines(sections["Verdict"]))
     if not root_cause or not evidence or not actions or not verdict:
         return None
+    verdict = verdict.strip().upper()
+    if verdict not in {"PLATFORM ISSUE", "APPLICATION ISSUE", "INCONCLUSIVE"}:
+        return None
 
     return {
         "summary": root_cause,

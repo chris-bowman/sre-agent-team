@@ -132,7 +132,7 @@ Allowed values are:
 
 During the v1 compatibility window, `workload_name` is accepted as an alias for `caller_label`. Supplying both with different values returns `invalid_request`.
 
-When the final verdict is `PLATFORM ISSUE`, the caller-visible findings are intentionally reduced to a handoff notice. Platform resource names, topology, root cause, evidence, and remediation remain restricted to the platform team.
+For every final verdict, caller-visible findings are a fixed proxy-authored ownership and handoff response. Model-generated resource names, topology, root cause, evidence, and remediation remain restricted to the platform-owned investigation thread. `PLATFORM ISSUE` directs the caller to the platform team; `APPLICATION ISSUE` directs continued investigation within the authorized workload resource group; `INCONCLUSIVE` directs platform-team follow-up.
 
 ### Investigation Lifecycle Response
 

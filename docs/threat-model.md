@@ -46,7 +46,7 @@ proxy's managed identity can call the platform agent.
 | Over-broad workload inspection | RBAC assignments loop over explicit `scopedResourceGroups` | Resource groups must be validated operationally |
 | Replay of an investigation request | Caller-scoped idempotency keys and request fingerprints persisted with investigation state | Clients must retain and correctly reuse idempotency keys |
 | Caller requests an unrelated resource group | App Configuration policy contains canonical `allowed_resource_groups`; each create request supplies one authorized group and is denied before platform access when it is not allowlisted | This routing boundary does not reduce the privileged platform agent's underlying Azure RBAC |
-| Platform details disclosed to a workload caller | Finalized structured output is validated centrally; `PLATFORM ISSUE` is projected to a generic platform-team handoff with evidence and remediation removed | A compromised or misclassifying privileged agent could label platform data as an application issue; hard tool/RBAC isolation remains open |
+| Platform details disclosed to a workload caller | Finalized structured output and verdict are validated centrally; every verdict is replaced with fixed proxy-authored ownership and handoff guidance | Detailed findings remain sensitive platform-thread data and require protected operator access |
 | Event-loop starvation | JWT/JWKS, managed identity, App Configuration, and Table calls use a bounded offloader; upstream platform calls have bounded per-replica admission and queue time | Limits are per replica rather than globally distributed |
 
 ## Security Invariants
@@ -76,10 +76,9 @@ proxy's managed identity can call the platform agent.
 
 ## Open Decisions for the Next Phase
 
-1. Enforce caller resource entitlements in trusted platform-agent tool scope or
-  narrower RBAC. App Configuration routing plus output projection is not a hard
-  substitute for limiting what the privileged agent can read.
-2. Complete the authorized two-caller/two-replica adversarial staging suite,
+1. Complete the authorized two-caller/two-replica adversarial staging suite,
   including unexpired-token revocation and uncertain-create fault injection.
+2. Evaluate separate platform agents or a trusted tool broker for organizations
+  requiring per-caller isolation within platform-owned tool scope.
 3. Evaluate a distributed caller/service rate limiter if per-replica admission
   is insufficient at the configured maximum scale.

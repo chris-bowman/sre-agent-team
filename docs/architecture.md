@@ -78,9 +78,10 @@ sequenceDiagram
 
     PEA->>Proxy: get_investigation_summary("abc123")
     Proxy->>PA: GET /api/v1/threads/abc123/messages
-    PA-->>Proxy: [findings markdown]
-    Proxy-->>PEA: { summary: "Root cause: Azure Firewall rule missing..." }
-    PEA->>U: Presents structured findings report
+    PA-->>Proxy: [detailed findings markdown in platform-owned thread]
+    Proxy->>Proxy: Validate final report and map verdict to fixed public response
+    Proxy-->>PEA: { summary: "A platform issue was identified. Engage the platform team." }
+    PEA->>U: Presents caller-safe ownership and handoff guidance
 ```
 
 ---
@@ -97,6 +98,8 @@ sequenceDiagram
 | Workload SRE Agent MI | Reader | Own workload subscription or resource-group scope | Read own app resources |
 | Workload SRE Agent MI | Monitoring Reader | Own workload subscription or resource-group scope | Read own monitoring data |
 | Workload SRE Agent MI | EscalationCaller (Entra app role) | Proxy Entra app registration | Can call proxy — not platform agent directly |
+
+Caller policy also contains canonical workload resource-group IDs. This allowlist controls admission and routing, not the Platform SRE Agent's Azure RBAC. Detailed findings stay in the platform-owned thread; callers receive only fixed proxy-authored verdict guidance. See [ADR 004](./adr/004-caller-resource-scope-and-platform-disclosure.md).
 
 ---
 

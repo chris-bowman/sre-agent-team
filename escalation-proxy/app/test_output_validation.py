@@ -102,3 +102,18 @@ FINALIZATION_TOKEN: CUSTOM_FINAL"""
         "recommended_actions": ["Restore the approved route."],
         "limitations": ["Findings are investigation guidance; the proxy performed no remediation."],
     }
+
+
+def test_parse_finalized_findings_rejects_unknown_verdict():
+    report = """## Platform Investigation Findings
+### Root Cause
+Route configuration changed.
+### Evidence
+- Internal evidence.
+### Recommended Actions
+1. Internal action.
+### Verdict
+UNKNOWN OWNER
+FINALIZATION_TOKEN: CUSTOM_FINAL"""
+
+    assert parse_finalized_findings(report, finalization_token="CUSTOM_FINAL") is None

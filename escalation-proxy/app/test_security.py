@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from investigation_service import InvestigationService
 from main import (
     ACTIVE_METADATA_RETENTION_SECONDS,
     EXPIRY_CLEANUP_INTERVAL_SECONDS,
@@ -1017,6 +1018,40 @@ FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
     assert record.findings_schema_valid
     assert record.findings_selection_strategy == "best_structured_message"
     assert record.findings_redacted
+
+
+@pytest.mark.parametrize(
+    ("verdict", "expected_summary"),
+    [
+        (
+            "PLATFORM ISSUE",
+            "A platform issue was identified. Please engage the platform team for investigation and remediation.",
+        ),
+        (
+            "APPLICATION ISSUE",
+            "No platform issue was identified. Continue investigation within the authorized workload resource group.",
+        ),
+        (
+            "INCONCLUSIVE",
+            "The platform investigation was inconclusive. Engage the platform team for next steps.",
+        ),
+    ],
+)
+def test_public_findings_never_expose_model_generated_details(verdict, expected_summary):
+    result = InvestigationService._public_findings(
+        {
+            "summary": "platform-secret-summary",
+            "impact": verdict,
+            "evidence": ["platform-secret-evidence"],
+            "likely_causes": ["platform-secret-cause"],
+            "recommended_actions": ["platform-secret-action"],
+            "limitations": [],
+        }
+    )
+
+    assert result["summary"] == expected_summary
+    assert result["impact"] == verdict
+    assert "platform-secret" not in json.dumps(result)
 
 
 def test_reservation_counts_against_quota_before_platform_thread_creation(registry):

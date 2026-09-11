@@ -136,6 +136,15 @@ MAX_CONCURRENT_PLATFORM_REQUESTS = max(int(os.environ.get("MAX_CONCURRENT_PLATFO
 PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS = max(
     float(os.environ.get("PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS", "0.25")), 0.01
 )
+READINESS_CACHE_SECONDS = max(
+    float(
+        os.environ.get(
+            "READINESS_CACHE_SECONDS",
+            "5" if os.environ.get("REGISTRY_BACKEND", "memory").strip().lower() == "table" else "0",
+        )
+    ),
+    0,
+)
 EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
@@ -163,6 +172,8 @@ _caller_policy_store = build_caller_policy_store(
 )
 _blocking_sdk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_BLOCKING_SDK_CALLS)
 _platform_request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PLATFORM_REQUESTS)
+_readiness_lock = asyncio.Lock()
+_readiness_cache: tuple[float, str | None] = (0.0, None)
 
 
 async def _run_blocking_sdk_call(function, *args, **kwargs):
@@ -182,6 +193,36 @@ async def _bounded_platform_request(*args, **kwargs):
         return await _platform_request(*args, **kwargs)
     finally:
         _platform_request_semaphore.release()
+
+
+async def _probe_readiness_dependency() -> str | None:
+    global _readiness_cache
+    now = time.monotonic()
+    cached_at, cached_failure = _readiness_cache
+    if READINESS_CACHE_SECONDS and now - cached_at < READINESS_CACHE_SECONDS:
+        return cached_failure
+
+    async with _readiness_lock:
+        now = time.monotonic()
+        cached_at, cached_failure = _readiness_cache
+        if READINESS_CACHE_SECONDS and now - cached_at < READINESS_CACHE_SECONDS:
+            return cached_failure
+        checks = (
+            ("caller_policy", _caller_policy_store.health_check),
+            ("registry", _investigation_registry.health_check),
+            ("platform_identity", get_platform_agent_token),
+        )
+        for dependency, check in checks:
+            try:
+                await _run_blocking_sdk_call(check)
+            except Exception:
+                _readiness_cache = (now, dependency)
+                return dependency
+        if not _platform_circuit_breaker.is_available():
+            _readiness_cache = (now, "platform_circuit")
+            return "platform_circuit"
+        _readiness_cache = (now, None)
+        return None
 
 
 _caller_authorization = CallerAuthorization(
@@ -494,23 +535,9 @@ async def health_check():
 @app.get("/health/ready")
 async def readiness_check():
     """Report whether required policy, registry, and platform dependencies are usable."""
-    try:
-        _caller_policy_store.health_check()
-    except Exception:
-        log_event("readiness_check_failed", dependency="caller_policy")
-        return JSONResponse(status_code=503, content={"status": "not_ready"})
-    try:
-        _investigation_registry.health_check()
-    except Exception:
-        log_event("readiness_check_failed", dependency="registry")
-        return JSONResponse(status_code=503, content={"status": "not_ready"})
-    try:
-        get_platform_agent_token()
-    except Exception:
-        log_event("readiness_check_failed", dependency="platform_identity")
-        return JSONResponse(status_code=503, content={"status": "not_ready"})
-    if not _platform_circuit_breaker.is_available():
-        log_event("readiness_check_failed", dependency="platform_circuit")
+    failed_dependency = await _probe_readiness_dependency()
+    if failed_dependency:
+        log_event("readiness_check_failed", dependency=failed_dependency)
         return JSONResponse(status_code=503, content={"status": "not_ready"})
     log_event("readiness_check_succeeded", outcome="success")
     return {"status": "ready"}

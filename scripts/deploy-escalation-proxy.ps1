@@ -39,6 +39,7 @@ param (
     [ValidateRange(1, 100)] [int] $MaxConcurrentBlockingSdkCalls = 16,
     [ValidateRange(1, 100)] [int] $MaxConcurrentPlatformRequests = 16,
     [ValidateRange(0.01, 30)] [double] $PlatformRequestQueueTimeoutSeconds = 0.25,
+    [ValidateRange(0, 60)] [int] $ReadinessCacheSeconds = 5,
     [ValidateSet('table', 'memory')] [string] $RegistryBackend = 'table',
     [switch] $EnablePrivateNetworking,
     [string] $PrivateNetworkName = '',
@@ -379,6 +380,7 @@ $deployOutputJson = az deployment group create `
         maxConcurrentBlockingSdkCalls=$MaxConcurrentBlockingSdkCalls `
         maxConcurrentPlatformRequests=$MaxConcurrentPlatformRequests `
         platformRequestQueueTimeoutSeconds=$($PlatformRequestQueueTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture)) `
+        readinessCacheSeconds=$ReadinessCacheSeconds `
         "enablePrivateNetworking=$privateNetworkingValue" `
         privateNetworkName=$PrivateNetworkName `
         privateNetworkAddressPrefix=$PrivateNetworkAddressPrefix `

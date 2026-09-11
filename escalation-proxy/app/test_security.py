@@ -1822,6 +1822,27 @@ def test_readiness_check_reports_registry_failure_without_details():
     assert "secret registry detail" not in response.text
 
 
+def test_readiness_checks_are_cached_and_coalesced():
+    client = TestClient(app)
+    with (
+        patch("main.READINESS_CACHE_SECONDS", 5),
+        patch("main._readiness_cache", (0.0, None)),
+        patch("main._caller_policy_store.health_check") as policy_check,
+        patch("main._investigation_registry.health_check") as registry_check,
+        patch("main.get_platform_agent_token", return_value="token") as token_check,
+        patch("main._platform_circuit_breaker.is_available", return_value=True) as circuit_check,
+    ):
+        first = client.get("/health/ready")
+        second = client.get("/health/ready")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    policy_check.assert_called_once()
+    registry_check.assert_called_once()
+    token_check.assert_called_once()
+    circuit_check.assert_called_once()
+
+
 def test_mcp_probe_endpoint():
     """Test that MCP probe endpoint is accessible without auth."""
     client = TestClient(app)

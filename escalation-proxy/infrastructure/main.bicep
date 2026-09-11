@@ -135,6 +135,10 @@ param maxConcurrentPlatformRequests int = 16
 @description('Seconds a request may wait for Platform SRE Agent call capacity before receiving 429.')
 param platformRequestQueueTimeoutSeconds string = '0.25'
 
+@minValue(0)
+@description('Seconds to cache and coalesce readiness dependency results per proxy replica.')
+param readinessCacheSeconds int = 5
+
 @minValue(1)
 @description('Number of exhausted Platform SRE Agent requests that opens the circuit breaker.')
 param platformCircuitFailureThreshold int = 5
@@ -423,6 +427,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'MAX_CONCURRENT_BLOCKING_SDK_CALLS', value: string(maxConcurrentBlockingSdkCalls) }
             { name: 'MAX_CONCURRENT_PLATFORM_REQUESTS', value: string(maxConcurrentPlatformRequests) }
             { name: 'PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS', value: platformRequestQueueTimeoutSeconds }
+            { name: 'READINESS_CACHE_SECONDS', value: string(readinessCacheSeconds) }
             { name: 'MCP_ALLOWED_HOSTS', value: mcpAllowedHosts }
             { name: 'MCP_ENABLE_DNS_REBINDING_PROTECTION', value: mcpEnableDnsRebindingProtection }
             { name: 'PLATFORM_CIRCUIT_FAILURE_THRESHOLD', value: string(platformCircuitFailureThreshold) }

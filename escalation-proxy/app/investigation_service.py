@@ -280,8 +280,10 @@ class InvestigationService:
             f"Instructions: Investigate the above platform-layer issue. Return findings in a delimited response schema."
         )
 
+        platform_request_started = False
         try:
             platform_token = self._get_platform_agent_token()
+            platform_request_started = True
             response = await self._platform_request(
                 "POST",
                 "/threads",
@@ -296,8 +298,15 @@ class InvestigationService:
 
             self._registry.finalize_reservation(investigation_id, caller.appid, thread_id)
         except Exception:
-            self._registry.release_reservation(investigation_id, caller.appid)
-            self._event_sink("investigation_reservation_released", investigation_id=investigation_id)
+            if not platform_request_started:
+                self._registry.release_reservation(investigation_id, caller.appid)
+                self._event_sink("investigation_reservation_released", investigation_id=investigation_id)
+            else:
+                self._event_sink(
+                    "investigation_creation_outcome_unknown",
+                    investigation_id=investigation_id,
+                    correlation_id=correlation_id,
+                )
             raise
 
         self._event_sink(

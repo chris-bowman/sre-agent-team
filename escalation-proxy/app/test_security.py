@@ -684,13 +684,39 @@ async def test_failed_platform_creation_releases_reserved_quota_slot(registry):
     with (
         patch("main._investigation_registry", registry),
         patch("main._caller_policy_store.authorize", return_value=policy),
-        patch("main.get_platform_agent_token", return_value="platform-token"),
-        patch("main._platform_request", new_callable=AsyncMock, side_effect=HTTPException(status_code=503)),
+        patch("main.get_platform_agent_token", side_effect=HTTPException(status_code=503)),
     ):
         with pytest.raises(HTTPException):
             await _create_investigation_impl(request, caller)
 
     assert registry._registry == {}
+
+
+@pytest.mark.asyncio
+async def test_uncertain_platform_creation_retains_reservation_for_recovery(registry):
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    request = CreateInvestigationRequest(
+        description="Investigate a platform outage.", workload_name="consumer", severity="high"
+    )
+    policy = MagicMock(
+        display_name="Caller One",
+        enabled=True,
+        maximum_severity="high",
+        maximum_concurrent_investigations=1,
+    )
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+        patch("main._platform_request", new_callable=AsyncMock, side_effect=HTTPException(status_code=503)),
+    ):
+        with pytest.raises(HTTPException):
+            await _create_investigation_impl(request, caller, "recoverable-request")
+
+    reserved = registry.find_by_idempotency_key("appid1", "recoverable-request")
+    assert reserved is not None
+    assert reserved.reservation_state == "reserved"
 
 
 @pytest.mark.asyncio

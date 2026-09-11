@@ -622,6 +622,7 @@ async def create_investigation_v1(
     legacy_request = CreateInvestigationRequest(
         description=req.description,
         workload_name=req.caller_label,
+        resource_group_id=req.resource_group_id,
         severity=req.severity,
         context=req.context,
     )

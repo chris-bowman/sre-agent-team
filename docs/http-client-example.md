@@ -5,7 +5,7 @@ This example uses a same-tenant managed identity to call the Platform Escalation
 ## Prerequisites
 
 1. The caller service principal has the `EscalationCaller` app role on the proxy Entra application.
-2. The platform operator has added the caller application ID to `CALLER_POLICIES_JSON` when policy configuration is enabled.
+2. The platform operator has registered the caller and one or more workload-owned `allowed_resource_groups` in Azure App Configuration.
 3. The caller can reach the proxy HTTPS endpoint.
 
 ## Python
@@ -33,6 +33,7 @@ creation = requests.post(
     json={
         "description": "The shared API is unreachable from the caller workload.",
         "caller_label": "example-consumer",
+        "resource_group_id": "/subscriptions/<subscription-id>/resourceGroups/<workload-resource-group>",
         "severity": "high",
         "context": "Connection failures began after the latest network deployment.",
     },

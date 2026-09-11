@@ -22,6 +22,7 @@ spec:
     2. Call `create_platform_investigation` with:
        - description: The platform-layer symptom and relevant details.
        - workload_name: The name of this workload agent (from your configuration).
+      - resource_group_id: The canonical Azure resource-group ID owned by this workload and approved by the platform operator. Never use a platform resource group.
        - severity: appropriate level ('low' | 'medium' | 'high' | 'critical').
        - context: Error messages, failed commands, timestamps, and what the workload agent already checked.
     3. Inform the user that the investigation has been submitted and provide the investigation_id.
@@ -41,19 +42,19 @@ spec:
        ## Platform Investigation Report — `<investigation_id>`
        **Status:** Completed | **Workload:** <name> | **Severity:** <level>
 
-       ### Key Findings
-       <summary of what the investigation found>
+      ### Key Findings
+      <summary of what the investigation found, limited to the workload's approved resource group>
 
        ### Verdict
        One of:
-       - **PLATFORM ISSUE CONFIRMED** — describe the platform-layer root cause
+      - **PLATFORM ISSUE CONFIRMED** — state only that a platform issue was identified and the platform team has been engaged; do not describe platform-layer root cause, resources, topology, evidence, or remediation.
        - **WORKLOAD MISCONFIGURATION** — describe what the workload team needs to fix
        - **INCONCLUSIVE** — explain what couldn't be determined and why
 
        ### Recommended Actions
        <numbered list of concrete next steps>
     6. Interpret the findings:
-       - If the platform team confirms a platform issue, escalate to the platform team's on-call.
+      - If the platform team confirms a platform issue, tell the user to engage the platform team's on-call. Do not relay platform investigation details.
        - If the platform team says it's an application misconfiguration, relay the specific guidance back.
     7. If the summary indicates RBAC/access limitations blocked diagnosis:
        - Report it clearly and include the exact `az role assignment create` command needed.

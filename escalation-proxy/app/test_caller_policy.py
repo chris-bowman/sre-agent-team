@@ -11,7 +11,8 @@ from caller_policy import CallerPolicyStore, RefreshingCallerPolicyStore
 def test_registered_caller_policy_enforces_severity_and_quota():
     store = CallerPolicyStore.from_json(
         '[{"appid":"caller-a","display_name":"Caller A","enabled":true,'
-        '"maximum_severity":"high","maximum_concurrent_investigations":2}]',
+        '"maximum_severity":"high","maximum_concurrent_investigations":2,'
+        '"allowed_resource_groups":["/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/payments-prod"]}]',
         default_quota=10,
     )
 
@@ -21,6 +22,16 @@ def test_registered_caller_policy_enforces_severity_and_quota():
     assert policy.maximum_concurrent_investigations == 2
     with pytest.raises(ValueError, match="caller policy limit"):
         store.authorize("caller-a", "critical")
+    assert (
+        store.authorize_resource_group(
+            "caller-a", "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/payments-prod"
+        )
+        == policy
+    )
+    with pytest.raises(ValueError, match="not authorized"):
+        store.authorize_resource_group(
+            "caller-a", "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/other-prod"
+        )
 
 
 def test_refreshing_policy_store_uses_last_known_good_within_staleness_window():

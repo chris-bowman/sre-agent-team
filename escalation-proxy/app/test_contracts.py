@@ -66,14 +66,15 @@ def test_request_problem_and_registration_constraints_are_enforced():
     request = CreateInvestigationV1Request(
         description="Investigate failed private endpoint resolution.",
         caller_label="payments-prod",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/payments-prod",
     )
     assert request.severity == "medium"
 
     with pytest.raises(ValidationError):
-        CreateInvestigationV1Request(description="x" * 5001, caller_label="payments-prod")
+        CreateInvestigationV1Request(description="x" * 5001, caller_label="payments-prod", resource_group_id="rg")
 
     with pytest.raises(ValidationError):
-        CreateInvestigationV1Request(description="valid", caller_label="x" * 257)
+        CreateInvestigationV1Request(description="valid", caller_label="x" * 257, resource_group_id="rg")
 
     with pytest.raises(ValidationError):
         ProblemDetails(
@@ -93,6 +94,7 @@ def test_request_problem_and_registration_constraints_are_enforced():
         enabled=True,
         maximum_severity="high",
         maximum_concurrent_investigations=3,
+        allowed_resource_groups=["/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/payments-prod"],
         created_at=LIFECYCLE["created_at"],
         created_by="platform-operator@example.com",
         updated_at=LIFECYCLE["updated_at"],

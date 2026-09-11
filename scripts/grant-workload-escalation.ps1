@@ -13,6 +13,7 @@ param (
     [string] $MaximumSeverity = 'critical',
     [ValidateRange(1, 100)]
     [int] $MaximumConcurrentInvestigations = 10,
+    [string[]] $AllowedResourceGroup = @(),
     [switch] $UpdateExistingPolicy,
     [switch] $SkipPolicyUpdate
 )
@@ -44,6 +45,9 @@ $principalIds = @(
 if ($principalIds.Count -eq 0) {
     throw 'WorkloadPrincipalId is required. Pass it explicitly or deploy the workload agent first.'
 }
+if (-not $SkipPolicyUpdate -and $AllowedResourceGroup.Count -eq 0 -and -not $UpdateExistingPolicy) {
+    throw 'AllowedResourceGroup is required for new caller onboarding. Pass the workload-owned resource group name or canonical ID.'
+}
 
 foreach ($principalId in $principalIds) {
     $arguments = @{
@@ -53,6 +57,7 @@ foreach ($principalId in $principalIds) {
         SubscriptionId    = $resolvedSubscriptionId
         ResourceGroup     = $resolvedResourceGroup
         ProxyAppName      = $resolvedProxyAppName
+        AllowedResourceGroup = $AllowedResourceGroup
         SkipPolicyUpdate  = $SkipPolicyUpdate
     }
     if (-not [string]::IsNullOrWhiteSpace($WorkloadName)) { $arguments.CallerDisplayName = $WorkloadName }

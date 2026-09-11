@@ -20,6 +20,7 @@ param (
     [string] $MaximumSeverity = 'critical',
     [ValidateRange(1, 100)]
     [int] $MaximumConcurrentInvestigations = 10,
+    [string[]] $AllowedResourceGroup = @(),
     [switch] $UpdateExistingPolicy,
     [switch] $SkipPolicyUpdate
 )
@@ -31,6 +32,7 @@ $ErrorActionPreference = 'Stop'
 
 $maximumSeveritySpecified = $PSBoundParameters.ContainsKey('MaximumSeverity')
 $maximumConcurrencySpecified = $PSBoundParameters.ContainsKey('MaximumConcurrentInvestigations')
+$resourceGroupsSpecified = $PSBoundParameters.ContainsKey('AllowedResourceGroup')
 $displayNameSpecified = $PSBoundParameters.ContainsKey('CallerDisplayName') -or $PSBoundParameters.ContainsKey('WorkloadName')
 
 function Invoke-AzJson {
@@ -223,7 +225,8 @@ function New-CallerPolicy {
         [Parameter(Mandatory)] [bool] $Enabled,
         [string] $Severity = 'critical',
         [int] $Quota = 10,
-        [string] $DisplayName = ''
+        [string] $DisplayName = '',
+        [string[]] $AllowedResourceGroups = @()
     )
 
     if ([string]::IsNullOrWhiteSpace($DisplayName)) { $DisplayName = $ServicePrincipal.displayName }
@@ -233,6 +236,7 @@ function New-CallerPolicy {
         enabled                           = $Enabled
         maximum_severity                  = $Severity
         maximum_concurrent_investigations = $Quota
+        allowed_resource_groups           = @($AllowedResourceGroups)
     }
 }
 
@@ -322,6 +326,16 @@ if ($Operation -eq 'List') {
 $callerServicePrincipal = Get-CallerServicePrincipal -PrincipalId $CallerPrincipalId
 $callerAssignments = @($assignments | Where-Object principalId -eq $callerServicePrincipal.id)
 $callerPolicy = @($policies | Where-Object appid -eq $callerServicePrincipal.appId) | Select-Object -First 1
+$resolvedAllowedResourceGroups = if ($resourceGroupsSpecified) {
+    @(Resolve-AllowedResourceGroupIds -ResourceGroups $AllowedResourceGroup)
+} elseif ($null -ne $callerPolicy) {
+    @($callerPolicy.allowed_resource_groups)
+} else {
+    @()
+}
+if ($Operation -eq 'Grant' -and ($null -eq $callerPolicy -or $UpdateExistingPolicy) -and $resolvedAllowedResourceGroups.Count -eq 0) {
+    throw 'AllowedResourceGroup is required when enabling a caller policy. Pass one or more workload-owned resource group names or canonical IDs.'
+}
 
 if ($Operation -eq 'Verify') {
     $policyAllowsCaller = $policies.Count -eq 0 -or ($null -ne $callerPolicy -and $callerPolicy.enabled)
@@ -333,6 +347,7 @@ if ($Operation -eq 'Verify') {
         policy_registered = $null -ne $callerPolicy
         policy_mode = if ($policies.Count -eq 0) { 'permissive' } else { 'allowlist' }
         enabled = $policyAllowsCaller
+        allowed_resource_groups = @($callerPolicy.allowed_resource_groups)
     }
     $result
     if (-not $result.role_assigned -or -not $result.enabled) {
@@ -353,7 +368,8 @@ if ($Operation -eq 'Grant') {
             -Enabled $true `
             -Severity $severity `
             -Quota $quota `
-            -DisplayName $displayName
+            -DisplayName $displayName `
+            -AllowedResourceGroups $resolvedAllowedResourceGroups
         if ($PSCmdlet.ShouldProcess($ProxyAppName, "Enable caller policy for $($callerServicePrincipal.appId)")) {
             Set-CallerPolicies -Policies $policies
         }
@@ -385,7 +401,8 @@ if ($Operation -eq 'Disable') {
         -Enabled $false `
         -Severity $(if ($null -ne $callerPolicy) { $callerPolicy.maximum_severity } else { $MaximumSeverity }) `
         -Quota $(if ($null -ne $callerPolicy) { $callerPolicy.maximum_concurrent_investigations } else { $MaximumConcurrentInvestigations }) `
-        -DisplayName $(if ($null -ne $callerPolicy) { $callerPolicy.display_name } else { $CallerDisplayName })
+        -DisplayName $(if ($null -ne $callerPolicy) { $callerPolicy.display_name } else { $CallerDisplayName }) `
+        -AllowedResourceGroups $resolvedAllowedResourceGroups
     if ($PSCmdlet.ShouldProcess($ProxyAppName, "Disable caller policy for $($callerServicePrincipal.appId)")) {
         Set-CallerPolicies -Policies $policies
     }
@@ -415,7 +432,8 @@ if ($Operation -eq 'Revoke') {
         -Enabled $false `
         -Severity $(if ($null -ne $callerPolicy) { $callerPolicy.maximum_severity } else { $MaximumSeverity }) `
         -Quota $(if ($null -ne $callerPolicy) { $callerPolicy.maximum_concurrent_investigations } else { $MaximumConcurrentInvestigations }) `
-        -DisplayName $(if ($null -ne $callerPolicy) { $callerPolicy.display_name } else { $CallerDisplayName })
+        -DisplayName $(if ($null -ne $callerPolicy) { $callerPolicy.display_name } else { $CallerDisplayName }) `
+        -AllowedResourceGroups $resolvedAllowedResourceGroups
     if ($PSCmdlet.ShouldProcess($ProxyAppName, "Retain disabled caller tombstone for $($callerServicePrincipal.appId)")) {
         Set-CallerPolicies -Policies $policies
     }
@@ -424,4 +442,23 @@ if ($Operation -eq 'Revoke') {
     } else {
         Write-Host "Caller '$($callerServicePrincipal.displayName)' is revoked with a disabled policy tombstone." -ForegroundColor Green
     }
+}
+
+function Resolve-AllowedResourceGroupIds {
+    param([Parameter(Mandatory)] [string[]] $ResourceGroups)
+
+    $resolved = @()
+    foreach ($resourceGroup in $ResourceGroups) {
+        if ([string]::IsNullOrWhiteSpace($resourceGroup)) { continue }
+        if ($resourceGroup -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+$') {
+            $resolved += $resourceGroup.ToLowerInvariant()
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
+            throw "SubscriptionId is required when AllowedResourceGroup '$resourceGroup' is a name rather than a resource ID."
+        }
+        $resource = Invoke-AzJson -Arguments @('group', 'show', '--name', $resourceGroup, '--subscription', $SubscriptionId)
+        $resolved += $resource.id.ToLowerInvariant()
+    }
+    return @($resolved | Select-Object -Unique)
 }

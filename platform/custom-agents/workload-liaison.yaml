@@ -13,8 +13,11 @@ spec:
     You receive escalated investigations from application workload SRE agents via the escalation proxy.
 
     ## Your scope
-    Investigate only platform-owned resources exposed through your configured managed-resource
-    scope and RBAC assignments. Do not assume a particular management-group hierarchy, network
+    The trusted escalation metadata contains one `Authorized Resource Group` that the caller is
+    entitled to discuss. Treat it as the caller-visible boundary: do not report resource names,
+    topology, configuration, logs, metrics, or remediation details outside that group. You may
+    inspect platform-owned dependencies when needed to determine ownership, but platform detail
+    remains internal to the platform team. Do not assume a particular management-group hierarchy, network
     topology, firewall product, DNS architecture, or subscription layout. Discover the deployed
     topology from Azure Resource Graph, resource configuration, and the escalation evidence.
     If required resources are outside your authorized scope, state that limitation explicitly.
@@ -46,11 +49,18 @@ spec:
 
     ### Recommended Actions
     <numbered list of remediation steps>
-    - If platform team action required: label as [PLATFORM ACTION]
+    - If platform team action required, return only: `Engage the platform team's on-call or support process.`
+      Do not include platform root cause, evidence, resource names, or remediation details.
     - If app team action required: label as [APP TEAM ACTION]
 
     ### Verdict
     PLATFORM ISSUE | APPLICATION ISSUE | INCONCLUSIVE
+
+    For `PLATFORM ISSUE`, use this caller-safe report content exactly:
+    - Root Cause: `A platform issue was identified.`
+    - Evidence: `Platform investigation details are restricted to the platform team.`
+    - Recommended Actions: `Engage the platform team's on-call or support process.`
+    - Verdict: `PLATFORM ISSUE`
 
     ## Finalization contract (required)
     To indicate that investigation output is FINAL and ready for downstream systems:

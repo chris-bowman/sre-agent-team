@@ -73,6 +73,9 @@ Platform operators own a registration for each allowed caller. A registration ha
   "enabled": true,
   "maximum_severity": "high",
   "maximum_concurrent_investigations": 3,
+  "allowed_resource_groups": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/payments-prod"
+  ],
   "created_at": "2026-08-26T18:42:00Z",
   "created_by": "platform-operator@example.com",
   "updated_at": "2026-08-26T18:42:00Z",
@@ -86,6 +89,8 @@ Required policy behavior:
 - Ownership checks use the validated caller `appid` captured on creation.
 - `maximum_severity` is an ordered ceiling: `low`, `medium`, `high`, `critical`.
 - Concurrent quota counts non-terminal, non-expired investigations for that caller.
+- `allowed_resource_groups` is an operator-owned allowlist of canonical Azure resource-group IDs. New investigations require exactly one allowed `resource_group_id`; missing or unauthorized scopes are denied.
+- Platform-owned findings return a bounded handoff notice only. Platform root cause, evidence, and remediation detail remain with the platform team.
 - The effective policy is snapshotted on creation for audit; disabling a caller still denies subsequent reads unless an operator explicitly chooses a break-glass recovery path.
 - Operator identity and timestamps are audit metadata and are not exposed to callers.
 
@@ -111,6 +116,7 @@ Allowed values are:
 {
   "description": "The caller cannot resolve the shared API private endpoint.",
   "caller_label": "payments-prod",
+  "resource_group_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/payments-prod",
   "severity": "high",
   "context": "Failure began after the 16:00 UTC network deployment."
 }
@@ -120,10 +126,13 @@ Allowed values are:
 |---|---|---:|---|
 | `description` | string | Yes | Non-empty; maximum is service-configured and published in OpenAPI/tool schema. |
 | `caller_label` | string | Yes | Untrusted display label; non-empty. |
+| `resource_group_id` | Azure resource-group ID | Yes | One canonical resource-group ID from the caller's operator-owned `allowed_resource_groups` policy. It guides the investigation; it does not grant caller access to platform resources. |
 | `severity` | string | No | `low`, `medium`, `high`, or `critical`; defaults to `medium`. |
 | `context` | string | No | Untrusted diagnostic evidence; defaults to an empty string. |
 
 During the v1 compatibility window, `workload_name` is accepted as an alias for `caller_label`. Supplying both with different values returns `invalid_request`.
+
+When the final verdict is `PLATFORM ISSUE`, the caller-visible findings are intentionally reduced to a handoff notice. Platform resource names, topology, root cause, evidence, and remediation remain restricted to the platform team.
 
 ### Investigation Lifecycle Response
 

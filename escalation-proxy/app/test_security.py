@@ -473,6 +473,7 @@ def test_prompt_injection_in_description_is_escaped():
     payload = {
         "description": injection_payload,
         "workload_name": "test-workload",
+        "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/test-workload",
         "severity": "high",
     }
 
@@ -510,17 +511,18 @@ def test_prompt_injection_in_description_is_escaped():
             ),
         )
 
-        with patch("main._investigation_registry.create_investigation") as mock_registry:
-            mock_registry.return_value = "inv-123"
+        with patch("main._caller_policy_store.authorize_resource_group"):
+            with patch("main._investigation_registry.create_investigation") as mock_registry:
+                mock_registry.return_value = "inv-123"
 
-            with patch("main.get_platform_agent_token", return_value="platform-token"):
-                with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-                    mock_post.return_value = MagicMock(
-                        status_code=200,
-                        json=lambda: {"id": "thread-123"},
-                    )
+                with patch("main.get_platform_agent_token", return_value="platform-token"):
+                    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+                        mock_post.return_value = MagicMock(
+                            status_code=200,
+                            json=lambda: {"id": "thread-123"},
+                        )
 
-                    client.post("/api/investigations", json=payload)
+                        client.post("/api/investigations", json=payload)
 
         # Verify the injection attempt was safely enclosed
         assert mock_post.called
@@ -735,13 +737,17 @@ async def test_disabled_caller_cannot_read_investigation(registry, operation):
 async def test_failed_platform_creation_releases_reserved_quota_slot(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     request = CreateInvestigationRequest(
-        description="Investigate a platform outage.", workload_name="consumer", severity="high"
+        description="Investigate a platform outage.",
+        workload_name="consumer",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer",
+        severity="high",
     )
     policy = MagicMock(maximum_concurrent_investigations=1)
 
     with (
         patch("main._investigation_registry", registry),
         patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main._caller_policy_store.authorize_resource_group", return_value=policy),
         patch("main.get_platform_agent_token", side_effect=HTTPException(status_code=503)),
     ):
         with pytest.raises(HTTPException):
@@ -754,7 +760,10 @@ async def test_failed_platform_creation_releases_reserved_quota_slot(registry):
 async def test_uncertain_platform_creation_retains_reservation_for_recovery(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     request = CreateInvestigationRequest(
-        description="Investigate a platform outage.", workload_name="consumer", severity="high"
+        description="Investigate a platform outage.",
+        workload_name="consumer",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer",
+        severity="high",
     )
     policy = MagicMock(
         display_name="Caller One",
@@ -766,6 +775,7 @@ async def test_uncertain_platform_creation_retains_reservation_for_recovery(regi
     with (
         patch("main._investigation_registry", registry),
         patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main._caller_policy_store.authorize_resource_group", return_value=policy),
         patch("main.get_platform_agent_token", return_value="platform-token"),
         patch("main._platform_request", new_callable=AsyncMock, side_effect=HTTPException(status_code=503)),
     ):
@@ -781,7 +791,10 @@ async def test_uncertain_platform_creation_retains_reservation_for_recovery(regi
 async def test_completed_idempotency_replay_does_not_create_another_platform_thread(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     request = CreateInvestigationRequest(
-        description="Investigate a platform outage.", workload_name="consumer", severity="high"
+        description="Investigate a platform outage.",
+        workload_name="consumer",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer",
+        severity="high",
     )
     policy = MagicMock(
         display_name="Caller One",
@@ -806,6 +819,7 @@ async def test_completed_idempotency_replay_does_not_create_another_platform_thr
     with (
         patch("main._investigation_registry", registry),
         patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main._caller_policy_store.authorize_resource_group", return_value=policy),
         patch("main._platform_request", new_callable=AsyncMock) as platform_request,
     ):
         result = await _create_investigation_impl(request, caller, "completed-request")
@@ -943,7 +957,10 @@ FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
 
     record = registry.get_investigation(investigation_id, "oid1", "appid1")
     assert result["status"] == "completed"
-    assert "Route configuration changed." in result["summary"]
+    assert (
+        result["summary"]
+        == "A platform issue was identified. Please engage the platform team for investigation and remediation."
+    )
     assert "Newer progress update" not in result["summary"]
     assert "secret-value" not in result["summary"]
     assert record.findings_schema_version == "1.0"
@@ -976,7 +993,11 @@ def test_reservation_counts_against_quota_before_platform_thread_creation(regist
 @pytest.mark.asyncio
 async def test_creation_uses_one_correlation_id_for_registry_and_platform_message(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
-    request = CreateInvestigationRequest(description="Investigate platform issue", workload_name="consumer")
+    request = CreateInvestigationRequest(
+        description="Investigate platform issue",
+        workload_name="consumer",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer",
+    )
     policy = MagicMock(
         display_name="Caller One",
         enabled=True,
@@ -988,6 +1009,7 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
     with (
         patch("main._investigation_registry", registry),
         patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main._caller_policy_store.authorize_resource_group", return_value=policy),
         patch("main.get_platform_agent_token", return_value="platform-token"),
         patch("main._platform_request", new_callable=AsyncMock, return_value=platform_response) as platform_request,
         patch("main.log_event") as event,
@@ -1017,7 +1039,11 @@ def test_v1_create_rejects_oversized_idempotency_key():
         )
         response = client.post(
             "/api/v1/investigations",
-            json={"description": "Problem", "caller_label": "consumer"},
+            json={
+                "description": "Problem",
+                "caller_label": "consumer",
+                "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer",
+            },
             headers={"Authorization": "Bearer ignored", "Idempotency-Key": "x" * 129},
         )
 
@@ -1029,7 +1055,11 @@ def test_v1_create_rejects_oversized_idempotency_key():
 @pytest.mark.asyncio
 async def test_create_rejects_disabled_caller_with_forbidden(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
-    request = CreateInvestigationRequest(description="Investigate platform issue", workload_name="consumer")
+    request = CreateInvestigationRequest(
+        description="Investigate platform issue",
+        workload_name="consumer",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer",
+    )
 
     with (
         patch("main._investigation_registry", registry),
@@ -1042,6 +1072,32 @@ async def test_create_rejects_disabled_caller_with_forbidden(registry):
             await _create_investigation_impl(request, caller, "disabled-caller-request")
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_unapproved_resource_group_before_platform_access(registry):
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    request = CreateInvestigationRequest(
+        description="Investigate platform issue",
+        workload_name="consumer",
+        resource_group_id="/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/other-workload",
+    )
+    policy = MagicMock(maximum_concurrent_investigations=1)
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=policy),
+        patch(
+            "main._caller_policy_store.authorize_resource_group",
+            side_effect=ValueError("Caller is not authorized for the requested resource group"),
+        ),
+        patch("main._platform_request", new_callable=AsyncMock) as platform_request,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _create_investigation_impl(request, caller, "denied-resource-group")
+
+    assert exc.value.status_code == 403
+    platform_request.assert_not_awaited()
 
 
 def test_requested_severity_respects_token_claim_ceiling():
@@ -1555,6 +1611,7 @@ def test_v1_create_uses_caller_label_and_canonical_lifecycle_response():
                     json={
                         "description": "Investigate the shared API failure.",
                         "caller_label": "payments-prod",
+                        "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/payments-prod",
                     },
                     headers={
                         "Authorization": "Bearer ignored",
@@ -1799,6 +1856,7 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
                             {
                                 "description": "Investigate a service failure.",
                                 "caller_label": "generic-consumer",
+                                "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/generic-consumer",
                                 "idempotency_key": "mcp-create-123",
                             },
                         )
@@ -1807,6 +1865,7 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
                             {
                                 "description": "Investigate a legacy caller failure.",
                                 "workload_name": "reference-consumer",
+                                "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/reference-consumer",
                                 "idempotency_key": "mcp-create-legacy-123",
                             },
                         )
@@ -1816,6 +1875,7 @@ async def test_official_mcp_client_calls_all_tools_and_reports_unknown_tool():
                                 "description": "Reject ambiguous caller metadata.",
                                 "caller_label": "generic-consumer",
                                 "workload_name": "different-consumer",
+                                "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/generic-consumer",
                                 "idempotency_key": "mcp-create-conflict-123",
                             },
                         )

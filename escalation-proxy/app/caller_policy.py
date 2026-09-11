@@ -1,6 +1,7 @@
 """Operator-owned authorization policy for same-tenant escalation callers."""
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from threading import Lock
@@ -10,6 +11,10 @@ from azure.appconfiguration import AzureAppConfigurationClient
 from azure.identity import DefaultAzureCredential
 
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+RESOURCE_GROUP_ID_PATTERN = re.compile(
+    r"^/subscriptions/[0-9a-f-]{36}/resourcegroups/[a-z0-9._()\-]{1,90}$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,7 @@ class CallerPolicy:
     enabled: bool
     maximum_severity: str
     maximum_concurrent_investigations: int
+    allowed_resource_groups: frozenset[str]
 
 
 class CallerPolicyStore:
@@ -51,7 +57,17 @@ class CallerPolicyStore:
             appid = str(entry["appid"]).strip()
             maximum_severity = str(entry.get("maximum_severity", "critical")).strip().lower()
             quota = int(entry.get("maximum_concurrent_investigations", default_quota))
-            if not appid or maximum_severity not in SEVERITY_ORDER or quota < 1:
+            resource_groups = entry.get("allowed_resource_groups", [])
+            if (
+                not appid
+                or maximum_severity not in SEVERITY_ORDER
+                or quota < 1
+                or not isinstance(resource_groups, list)
+                or any(
+                    not isinstance(group, str) or not RESOURCE_GROUP_ID_PATTERN.fullmatch(group.strip())
+                    for group in resource_groups
+                )
+            ):
                 raise ValueError("CALLER_POLICIES_JSON contains an invalid caller policy")
             policies[appid] = CallerPolicy(
                 appid=appid,
@@ -59,6 +75,7 @@ class CallerPolicyStore:
                 enabled=bool(entry.get("enabled", True)),
                 maximum_severity=maximum_severity,
                 maximum_concurrent_investigations=quota,
+                allowed_resource_groups=frozenset(group.strip().lower() for group in resource_groups),
             )
         return cls(policies, default_quota, allow_unregistered)
 
@@ -74,6 +91,7 @@ class CallerPolicyStore:
                 enabled=True,
                 maximum_severity="critical",
                 maximum_concurrent_investigations=self._default_quota,
+                allowed_resource_groups=frozenset(),
             )
         raise ValueError("Caller is not registered for the escalation service")
 
@@ -83,6 +101,17 @@ class CallerPolicyStore:
             raise ValueError("Caller is disabled for the escalation service")
         if SEVERITY_ORDER[severity] > SEVERITY_ORDER[policy.maximum_severity]:
             raise ValueError(f"Requested severity exceeds caller policy limit ({policy.maximum_severity})")
+        return policy
+
+    def authorize_resource_group(self, appid: str, resource_group_id: str) -> CallerPolicy:
+        policy = self.get(appid)
+        normalized_resource_group_id = resource_group_id.strip().lower()
+        if not policy.enabled:
+            raise ValueError("Caller is disabled for the escalation service")
+        if not RESOURCE_GROUP_ID_PATTERN.fullmatch(normalized_resource_group_id):
+            raise ValueError("resource_group_id must be a valid Azure resource group ID")
+        if normalized_resource_group_id not in policy.allowed_resource_groups:
+            raise ValueError("Caller is not authorized for the requested resource group")
         return policy
 
     def health_check(self) -> None:
@@ -167,6 +196,10 @@ class RefreshingCallerPolicyStore:
     def authorize(self, appid: str, severity: str) -> CallerPolicy:
         now = self.refresh()
         return self._require_usable_snapshot(now).authorize(appid, severity)
+
+    def authorize_resource_group(self, appid: str, resource_group_id: str) -> CallerPolicy:
+        now = self.refresh()
+        return self._require_usable_snapshot(now).authorize_resource_group(appid, resource_group_id)
 
     def health_check(self) -> None:
         now = self.refresh(force=True)

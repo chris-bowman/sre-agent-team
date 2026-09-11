@@ -18,6 +18,7 @@ class ContractModel(BaseModel):
 class CreateInvestigationV1Request(ContractModel):
     description: str = Field(min_length=1, max_length=5000)
     caller_label: str = Field(min_length=1, max_length=256)
+    resource_group_id: str = Field(min_length=1, max_length=180)
     severity: Severity = "medium"
     context: str = Field(default="", max_length=10000)
 
@@ -76,6 +77,7 @@ class CallerRegistration(ContractModel):
     enabled: bool
     maximum_severity: Severity
     maximum_concurrent_investigations: int = Field(ge=1)
+    allowed_resource_groups: list[str] = Field(min_length=1)
     created_at: datetime
     created_by: str = Field(min_length=1)
     updated_at: datetime
@@ -87,6 +89,7 @@ class CreateInvestigationRequest(BaseModel):
 
     description: str
     workload_name: str
+    resource_group_id: str = ""
     severity: str = "medium"
     context: str = ""
 

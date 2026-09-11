@@ -113,3 +113,15 @@ The deployment creates separate five-minute alerts for policy/readiness failures
 Azure App Configuration retains key-value revision history. Caller writes use the loaded ETag, so concurrent updates fail instead of overwriting another operator's change. To roll back, select the previous revision value in App Configuration and write it as the current value with the active label. Confirm a `caller_policy_snapshot_updated` event and run `manage-escalation-callers.ps1 -Operation List`.
 
 The `CALLER_POLICIES_JSON` Container App variable remains only as a rollback compatibility path when `APP_CONFIG_ENDPOINT` is absent. Do not use both sources operationally; App Configuration takes precedence.
+
+## Resource-group caller scopes
+
+Azure App Configuration is the production policy authority. Onboard each caller with one or more workload-owned resource groups; names are resolved to canonical IDs and stored in the caller's `allowed_resource_groups` policy field:
+
+```powershell
+.\scripts\manage-escalation-callers.ps1 -Operation Grant @proxy `
+	-CallerPrincipalId '<CALLER_SERVICE_PRINCIPAL_OBJECT_ID>' `
+	-AllowedResourceGroup 'payments-prod'
+```
+
+Every new investigation supplies exactly one `resource_group_id` from this operator-owned allowlist. Do not add platform resource groups to caller policies. A platform-owned diagnosis returns only a caller-safe handoff to engage the platform team; platform investigation detail remains internal.

@@ -89,6 +89,7 @@ def create_mcp_app():
     async def create_platform_investigation(
         description: str,
         idempotency_key: str,
+        resource_group_id: str,
         caller_label: str = "",
         severity: str = "medium",
         context: str = "",
@@ -107,6 +108,7 @@ def create_mcp_app():
             CreateInvestigationRequest(
                 description=description,
                 workload_name=resolved_caller_label,
+                resource_group_id=resource_group_id,
                 severity=severity,
                 context=context,
             ),

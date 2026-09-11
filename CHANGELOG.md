@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The project follows Kee
 
 ## [Unreleased]
 
+### Added
+
+- App Configuration-backed per-caller resource-group allowlists with one required scope per investigation.
+- Bounded offloading for JWT/JWKS, managed identity, App Configuration, and Table SDK calls, plus bounded Platform SRE Agent request admission.
+
+### Security
+
+- Platform-owned findings are reduced to a caller-safe platform-team handoff.
+- The runtime image now uses a pinned, patched Alpine base. The exact deployed candidate digest has zero HIGH/CRITICAL Trivy findings and the pinned Python dependency graph passes `pip-audit`.
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

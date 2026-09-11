@@ -125,3 +125,7 @@ Azure App Configuration is the production policy authority. Onboard each caller 
 ```
 
 Every new investigation supplies exactly one `resource_group_id` from this operator-owned allowlist. Do not add platform resource groups to caller policies. A platform-owned diagnosis returns only a caller-safe handoff to engage the platform team; platform investigation detail remains internal.
+
+This is an admission, routing, and disclosure control. It does not narrow the Platform SRE Agent's Azure RBAC. Until trusted per-caller tool scope or narrower RBAC is available, onboard only callers whose approved workload groups fit the platform agent's accepted trust boundary. Treat prompt instructions as defense in depth, not authorization.
+
+Per proxy replica, synchronous Azure SDK work is offloaded with `MaxConcurrentBlockingSdkCalls` (default 16). Platform requests use `MaxConcurrentPlatformRequests` (default 16) and wait up to `PlatformRequestQueueTimeoutSeconds` (default 0.25 seconds) before returning `429`. Tune these with load evidence; multiplying by the maximum replica count gives the approximate service-wide upper bound.

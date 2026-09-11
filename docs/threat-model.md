@@ -1,6 +1,6 @@
 # Escalation Proxy Threat Model
 
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-11
 
 ## Scope
 
@@ -45,6 +45,9 @@ proxy's managed identity can call the platform agent.
 | Internal error disclosure | Generic MCP response for unhandled exceptions; detailed event is server-side only | Logs require protected access and retention |
 | Over-broad workload inspection | RBAC assignments loop over explicit `scopedResourceGroups` | Resource groups must be validated operationally |
 | Replay of an investigation request | Caller-scoped idempotency keys and request fingerprints persisted with investigation state | Clients must retain and correctly reuse idempotency keys |
+| Caller requests an unrelated resource group | App Configuration policy contains canonical `allowed_resource_groups`; each create request supplies one authorized group and is denied before platform access when it is not allowlisted | This routing boundary does not reduce the privileged platform agent's underlying Azure RBAC |
+| Platform details disclosed to a workload caller | Finalized structured output is validated centrally; `PLATFORM ISSUE` is projected to a generic platform-team handoff with evidence and remediation removed | A compromised or misclassifying privileged agent could label platform data as an application issue; hard tool/RBAC isolation remains open |
+| Event-loop starvation | JWT/JWKS, managed identity, App Configuration, and Table calls use a bounded offloader; upstream platform calls have bounded per-replica admission and queue time | Limits are per replica rather than globally distributed |
 
 ## Security Invariants
 
@@ -57,6 +60,8 @@ proxy's managed identity can call the platform agent.
 - The workload agent has no platform-agent administrator role.
 - All authorization failures and sensitive access events are auditable without
   recording secrets.
+- A new investigation names exactly one operator-allowlisted workload resource
+  group. Platform-owned outcomes disclose only a generic handoff to the caller.
 
 ## Verification Plan
 
@@ -71,9 +76,10 @@ proxy's managed identity can call the platform agent.
 
 ## Open Decisions for the Next Phase
 
-1. Restore MCP SDK DNS-rebinding protection after resolving Azure SRE connector
-  Host-header compatibility.
-2. Add idempotent caller disable/revoke operations and validate their live denial paths.
-3. Define alert thresholds, dashboards, and retention for security audit events.
-4. Validate registry and Platform SRE Agent outage behavior, including safe errors,
-  readiness transitions, retry limits, and alerts.
+1. Enforce caller resource entitlements in trusted platform-agent tool scope or
+  narrower RBAC. App Configuration routing plus output projection is not a hard
+  substitute for limiting what the privileged agent can read.
+2. Complete the authorized two-caller/two-replica adversarial staging suite,
+  including unexpired-token revocation and uncertain-create fault injection.
+3. Evaluate a distributed caller/service rate limiter if per-replica admission
+  is insufficient at the configured maximum scale.

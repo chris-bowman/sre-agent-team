@@ -130,6 +130,7 @@ MAX_INVESTIGATION_DESCRIPTION_SIZE = 5000  # characters
 MAX_INVESTIGATION_CONTEXT_SIZE = 10000  # characters
 MAX_WORKLOAD_NAME_SIZE = 256  # characters
 MAX_IDEMPOTENCY_KEY_SIZE = 128
+MAX_REQUEST_BODY_BYTES = max(int(os.environ.get("MAX_REQUEST_BODY_BYTES", "65536")), 16384)
 EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
@@ -167,6 +168,47 @@ validate_requested_severity = _caller_authorization.validate_requested_severity
 extract_and_validate_token = _caller_authorization.extract_and_validate_token
 
 
+class RequestBodyLimitMiddleware:
+    def __init__(self, app, maximum_bytes: int) -> None:
+        self.app = app
+        self.maximum_bytes = maximum_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope["method"] not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next((value for name, value in scope["headers"] if name == b"content-length"), None)
+        if content_length is not None and int(content_length) > self.maximum_bytes:
+            await JSONResponse(status_code=413, content={"detail": "Request body is too large"})(scope, receive, send)
+            return
+
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > self.maximum_bytes:
+                await JSONResponse(status_code=413, content={"detail": "Request body is too large"})(
+                    scope, receive, send
+                )
+                return
+            if not message.get("more_body", False):
+                break
+
+        body_sent = False
+
+        async def receive_buffered_body():
+            nonlocal body_sent
+            if body_sent:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            body_sent = True
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        await self.app(scope, receive_buffered_body, send)
+
+
 def redact_sensitive_text(text: str) -> str:
     """Remove credential-shaped values before returning platform output."""
     return _output_redact_sensitive_text(text, event_sink=log_event)
@@ -174,6 +216,7 @@ def redact_sensitive_text(text: str) -> str:
 
 # ── HTTP API Server ──────────────────────────────────────────────────────────
 app = FastAPI(title="Platform Escalation Proxy")
+app.add_middleware(RequestBodyLimitMiddleware, maximum_bytes=MAX_REQUEST_BODY_BYTES)
 
 MCP_SERVER_INFO = {"name": "platform-escalation-proxy", "version": "1.0.0"}
 MCP_PROTOCOL_VERSION = "2024-11-05"

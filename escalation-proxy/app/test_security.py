@@ -38,6 +38,7 @@ from main import (
     MAX_INVESTIGATION_CONTEXT_SIZE,
     MAX_INVESTIGATION_DESCRIPTION_SIZE,
     MAX_INVESTIGATIONS_PER_WORKLOAD,
+    MAX_REQUEST_BODY_BYTES,
     MAX_STATUS_POLLS_PER_INVESTIGATION,
     MAX_STATUS_WAIT_SECONDS,
     CallerIdentity,
@@ -311,6 +312,21 @@ def test_create_investigation_rejects_oversized_description():
     assert response.status_code == 400
     assert "description must be" in response.json()["detail"]
     assert response.headers["deprecation"] == "true"
+
+
+def test_request_body_limit_rejects_before_authentication():
+    client = TestClient(app)
+
+    with patch("main.extract_and_validate_token") as authenticate:
+        response = client.post(
+            "/api/investigations",
+            content=b"x" * (MAX_REQUEST_BODY_BYTES + 1),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Request body is too large"}
+    authenticate.assert_not_called()
 
 
 def test_create_investigation_rejects_oversized_context():

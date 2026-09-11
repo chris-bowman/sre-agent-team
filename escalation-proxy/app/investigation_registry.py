@@ -255,7 +255,6 @@ class InvestigationRegistry:
                 record.caller_appid == caller_appid
                 and record.idempotency_key == idempotency_key
                 and time.time() <= record.expires_at
-                and record.reservation_state in {"reserved", "active"}
             ):
                 return record
         return None
@@ -345,6 +344,14 @@ class TableStorageInvestigationRegistry:
             isinstance(error, TableTransactionError) and getattr(error, "status_code", None) == 412
         )
 
+    def _delete_entity_if_unchanged(self, entity: dict[str, Any]) -> None:
+        self._table.delete_entity(
+            entity["PartitionKey"],
+            entity["RowKey"],
+            etag=self._entity_etag(entity),
+            match_condition=MatchConditions.IfNotModified,
+        )
+
     def _get_or_create_quota_counter(self, caller_appid: str) -> dict[str, Any]:
         try:
             return self._table.get_entity(self._partition_key(caller_appid), self._quota_counter_key())
@@ -373,7 +380,9 @@ class TableStorageInvestigationRegistry:
                     match_condition=MatchConditions.IfNotModified,
                 )
                 return
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_quota_counter_conflict", operation="decrement", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -515,7 +524,9 @@ class TableStorageInvestigationRegistry:
                 try:
                     if self._reconcile_quota_counter(workload_identity_appid, counter):
                         continue
-                except ResourceModifiedError:
+                except (ResourceModifiedError, TableTransactionError) as exc:
+                    if not self._is_concurrency_conflict(exc):
+                        raise
                     telemetry.log_event(
                         "table_quota_counter_conflict",
                         operation="reconcile",
@@ -590,7 +601,9 @@ class TableStorageInvestigationRegistry:
                     match_condition=MatchConditions.IfNotModified,
                 )
                 return
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_investigation_conflict", operation="finalize", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -613,7 +626,9 @@ class TableStorageInvestigationRegistry:
                 )
                 self._decrement_quota_counter(caller_appid)
                 return
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_investigation_conflict", operation="release", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -701,7 +716,9 @@ class TableStorageInvestigationRegistry:
                     match_condition=MatchConditions.IfNotModified,
                 )
                 return
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_investigation_conflict", operation="findings_metadata", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -741,6 +758,15 @@ class TableStorageInvestigationRegistry:
             return self.get_investigation(index["investigation_id"], "", caller_appid)
         except ResourceNotFoundError:
             return None
+        except ValueError:
+            try:
+                self._table.delete_entity(
+                    self._partition_key(caller_appid),
+                    self._idempotency_index_key(idempotency_key),
+                )
+            except ResourceNotFoundError:
+                pass
+            return None
 
     def find_by_idempotency_key(self, caller_appid: str, idempotency_key: str) -> InvestigationRecord | None:
         indexed_record = self._get_idempotency_record(caller_appid, idempotency_key)
@@ -778,7 +804,10 @@ class TableStorageInvestigationRegistry:
             )
             raise ValueError("Unauthorized: investigation belongs to a different caller")
         if time.time() > record.expires_at:
-            self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
+            try:
+                self._delete_entity_if_unchanged(entity)
+            except ResourceModifiedError as exc:
+                raise ValueError("Investigation state changed; please retry") from exc
             raise ValueError(f"Investigation {investigation_id} has expired")
         return record
 
@@ -796,7 +825,7 @@ class TableStorageInvestigationRegistry:
                     )
                     raise ValueError("Unauthorized: investigation belongs to a different caller")
                 if time.time() > record.expires_at:
-                    self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
+                    self._delete_entity_if_unchanged(entity)
                     raise ValueError(f"Investigation {investigation_id} has expired")
                 now = time.time()
                 if record.last_status_poll > 0 and now - record.last_status_poll < MIN_STATUS_POLL_INTERVAL_SECONDS:
@@ -816,7 +845,9 @@ class TableStorageInvestigationRegistry:
                     match_condition=MatchConditions.IfNotModified,
                 )
                 return
-            except ResourceModifiedError:
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
                 telemetry.log_event("table_investigation_conflict", operation="status_poll", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
@@ -848,9 +879,15 @@ class TableStorageInvestigationRegistry:
         deleted_count = 0
         for entity in expired:
             try:
-                self._table.delete_entity(entity["PartitionKey"], entity["RowKey"])
-            except ResourceNotFoundError:
+                self._delete_entity_if_unchanged(entity)
+            except (ResourceNotFoundError, ResourceModifiedError):
                 continue
+            idempotency_key = entity.get("idempotency_key", "")
+            if idempotency_key:
+                try:
+                    self._table.delete_entity(entity["PartitionKey"], self._idempotency_index_key(idempotency_key))
+                except ResourceNotFoundError:
+                    pass
             deleted_count += 1
             if entity.get("reservation_state", "active") in {"reserved", "active"} and entity.get("caller_appid"):
                 self._decrement_quota_counter(entity["caller_appid"])

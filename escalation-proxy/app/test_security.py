@@ -13,6 +13,7 @@ Covers:
 """
 
 import asyncio
+import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -22,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import jwt as pyjwt
 import pytest
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError
 from azure.data.tables._deserialize import _convert_to_entity
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -642,6 +643,26 @@ def test_registry_idempotency_replays_matching_request_and_rejects_conflict(regi
     assert registry.find_by_idempotency_key("appid2", "request-1") is None
 
 
+def test_registry_idempotency_replays_retained_completed_investigation(registry):
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+        idempotency_key="request-1",
+        request_fingerprint="fingerprint-1",
+    )
+    registry.complete_investigation(investigation_id, "appid1", "completed")
+
+    replay = registry.find_by_idempotency_key("appid1", "request-1")
+
+    assert replay is not None
+    assert replay.investigation_id == investigation_id
+    assert replay.reservation_state == "completed"
+
+
 def test_registry_concurrent_same_key_claim_creates_one_reservation(registry):
     def reserve():
         return registry.reserve_investigation(
@@ -738,6 +759,43 @@ async def test_uncertain_platform_creation_retains_reservation_for_recovery(regi
     reserved = registry.find_by_idempotency_key("appid1", "recoverable-request")
     assert reserved is not None
     assert reserved.reservation_state == "reserved"
+
+
+@pytest.mark.asyncio
+async def test_completed_idempotency_replay_does_not_create_another_platform_thread(registry):
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    request = CreateInvestigationRequest(
+        description="Investigate a platform outage.", workload_name="consumer", severity="high"
+    )
+    policy = MagicMock(
+        display_name="Caller One",
+        enabled=True,
+        maximum_severity="high",
+        maximum_concurrent_investigations=1,
+    )
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="consumer",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+        idempotency_key="completed-request",
+        request_fingerprint=hashlib.sha256(
+            b'{"context":"","description":"Investigate a platform outage.","severity":"high","workload_name":"consumer"}'
+        ).hexdigest(),
+    )
+    registry.complete_investigation(investigation_id, "appid1", "completed")
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=policy),
+        patch("main._platform_request", new_callable=AsyncMock) as platform_request,
+    ):
+        result = await _create_investigation_impl(request, caller, "completed-request")
+
+    assert result["investigation_id"] == investigation_id
+    platform_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1272,11 +1330,39 @@ def test_table_cleanup_ignores_entity_deleted_by_another_replica():
                     "caller_appid": "appid1",
                     "reservation_state": "active",
                     "expires_at": time.time() - 1,
+                    "etag": "deleted-etag",
                 }
             ]
 
-        def delete_entity(self, partition_key, row_key):
+        def delete_entity(self, partition_key, row_key, **kwargs):
             raise ResourceNotFoundError("already deleted")
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+    registry._decrement_quota_counter = MagicMock()
+
+    assert registry.cleanup_expired() == 0
+    registry._decrement_quota_counter.assert_not_called()
+
+
+def test_table_cleanup_does_not_delete_or_release_quota_after_concurrent_update():
+    class FakeTable:
+        def query_entities(self, query_filter):
+            return [
+                {
+                    "PartitionKey": "appid1",
+                    "RowKey": "investigation1",
+                    "caller_appid": "appid1",
+                    "reservation_state": "active",
+                    "expires_at": time.time() - 1,
+                    "etag": "stale-etag",
+                }
+            ]
+
+        def delete_entity(self, partition_key, row_key, **kwargs):
+            assert kwargs["etag"] == "stale-etag"
+            assert kwargs["match_condition"].name == "IfNotModified"
+            raise ResourceModifiedError(message="changed", response=MagicMock(status_code=412))
 
     registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
     registry._table = FakeTable()

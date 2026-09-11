@@ -811,7 +811,7 @@ async def test_completed_idempotency_replay_does_not_create_another_platform_thr
         severity="high",
         idempotency_key="completed-request",
         request_fingerprint=hashlib.sha256(
-            b'{"context":"","description":"Investigate a platform outage.","severity":"high","workload_name":"consumer"}'
+            b'{"context":"","description":"Investigate a platform outage.","resource_group_id":"/subscriptions/11111111-1111-1111-1111-111111111111/resourcegroups/consumer","severity":"high","workload_name":"consumer"}'
         ).hexdigest(),
     )
     registry.complete_investigation(investigation_id, "appid1", "completed")
@@ -824,7 +824,16 @@ async def test_completed_idempotency_replay_does_not_create_another_platform_thr
     ):
         result = await _create_investigation_impl(request, caller, "completed-request")
 
+        different_scope_request = request.model_copy(
+            update={
+                "resource_group_id": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/consumer-secondary"
+            }
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await _create_investigation_impl(different_scope_request, caller, "completed-request")
+
     assert result["investigation_id"] == investigation_id
+    assert exc_info.value.status_code == 409
     platform_request.assert_not_awaited()
 
 

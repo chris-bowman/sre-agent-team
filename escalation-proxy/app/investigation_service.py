@@ -216,6 +216,7 @@ class InvestigationService:
                 {
                     "description": req.description,
                     "workload_name": req.workload_name,
+                    "resource_group_id": req.resource_group_id.lower(),
                     "severity": normalized_severity,
                     "context": req.context,
                 },

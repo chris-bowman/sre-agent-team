@@ -16,7 +16,7 @@ from contracts import (
     InvestigationLifecycleResponse,
     RedactedSummaryResponse,
 )
-from investigation_registry import InvestigationRecord
+from investigation_registry import IdempotencyConflictError, InvestigationRecord
 
 
 class CallerPolicy(Protocol):
@@ -47,7 +47,7 @@ class InvestigationRegistry(Protocol):
         policy_display_name: str = "",
         policy_enabled: bool = True,
         policy_maximum_severity: str = "",
-    ) -> str: ...
+    ) -> Any: ...
 
     def finalize_reservation(
         self, investigation_id: str, caller_appid: str | None, platform_thread_id: str
@@ -230,7 +230,7 @@ class InvestigationService:
 
         correlation_id = str(self._uuid_factory())
         try:
-            investigation_id = self._registry.reserve_investigation(
+            reservation = self._registry.reserve_investigation(
                 caller_oid=caller.oid,
                 caller_appid=caller.appid,
                 workload_name=req.workload_name,
@@ -244,6 +244,8 @@ class InvestigationService:
                 policy_enabled=caller_policy.enabled,
                 policy_maximum_severity=caller_policy.maximum_severity,
             )
+        except IdempotencyConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             self._event_sink(
                 "investigation_admission_denied",
@@ -253,6 +255,14 @@ class InvestigationService:
                 severity=normalized_severity,
             )
             raise HTTPException(status_code=429, detail=str(exc))
+
+        investigation_id = reservation.investigation_id if hasattr(reservation, "investigation_id") else reservation
+        if hasattr(reservation, "created") and not reservation.created:
+            return {
+                "investigation_id": investigation_id,
+                "status": "pending",
+                "message": "Investigation already exists for this idempotency key.",
+            }
 
         self._event_sink(
             "investigation_reservation_created",

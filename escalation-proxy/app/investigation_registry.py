@@ -1,3 +1,4 @@
+import hashlib
 import os
 import random
 import time
@@ -60,6 +61,16 @@ class InvestigationRecord:
     findings_redacted: bool = False
 
 
+@dataclass(frozen=True)
+class ReservationResult:
+    investigation_id: str
+    created: bool
+
+
+class IdempotencyConflictError(ValueError):
+    """A caller reused an idempotency key for a different request."""
+
+
 class InvestigationRegistry:
     """Thread-safe registry of active investigations with ownership tracking."""
 
@@ -82,11 +93,17 @@ class InvestigationRegistry:
         policy_display_name: str = "",
         policy_enabled: bool = True,
         policy_maximum_severity: str = "",
-    ) -> str:
+    ) -> ReservationResult:
         """Atomically reserve one caller quota slot before creating a platform thread."""
         with self._lock:
             self.cleanup_expired(MAX_EXPIRY_CLEANUP_BATCH_SIZE)
             now = time.time()
+            if idempotency_key:
+                existing = self.find_by_idempotency_key(caller_appid, idempotency_key)
+                if existing:
+                    if existing.request_fingerprint != request_fingerprint:
+                        raise IdempotencyConflictError("Idempotency key was used with a different request")
+                    return ReservationResult(existing.investigation_id, created=False)
             active_count = sum(
                 1
                 for record in self._registry.values()
@@ -119,7 +136,7 @@ class InvestigationRegistry:
             )
             self._registry[investigation_id] = record
             self._workload_investigations.setdefault(workload_name, []).append(investigation_id)
-            return investigation_id
+            return ReservationResult(investigation_id, created=True)
 
     def finalize_reservation(self, investigation_id: str, caller_appid: str, platform_thread_id: str) -> None:
         with self._lock:
@@ -186,7 +203,7 @@ class InvestigationRegistry:
         request_correlation_id: str = "",
     ) -> str:
         """Register a new investigation. Returns the investigation_id."""
-        investigation_id = self.reserve_investigation(
+        reservation = self.reserve_investigation(
             caller_oid,
             caller_appid,
             workload_name,
@@ -197,8 +214,8 @@ class InvestigationRegistry:
             request_fingerprint,
             request_correlation_id,
         )
-        self.finalize_reservation(investigation_id, caller_appid, platform_thread_id)
-        return investigation_id
+        self.finalize_reservation(reservation.investigation_id, caller_appid, platform_thread_id)
+        return reservation.investigation_id
 
     def get_investigation(
         self, investigation_id: str, caller_oid: str, workload_identity_appid: str
@@ -304,6 +321,10 @@ class TableStorageInvestigationRegistry:
     @staticmethod
     def _quota_counter_key() -> str:
         return "__quota_counter__"
+
+    @staticmethod
+    def _idempotency_index_key(idempotency_key: str) -> str:
+        return f"__idempotency__{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()}"
 
     @staticmethod
     def _entity_etag(entity: dict[str, Any]) -> str:
@@ -464,7 +485,7 @@ class TableStorageInvestigationRegistry:
         policy_display_name: str = "",
         policy_enabled: bool = True,
         policy_maximum_severity: str = "",
-    ) -> str:
+    ) -> ReservationResult:
         """Atomically reserve a Table slot and increment its per-caller quota counter."""
         self.cleanup_expired(MAX_EXPIRY_CLEANUP_BATCH_SIZE)
         now = time.time()
@@ -506,22 +527,45 @@ class TableStorageInvestigationRegistry:
             updated_counter = dict(counter)
             updated_counter["active_count"] = active_count + 1
             try:
-                self._table.submit_transaction(
-                    [
+                operations = [
+                    (
+                        "update",
+                        updated_counter,
+                        {
+                            "mode": UpdateMode.REPLACE,
+                            "etag": self._entity_etag(counter),
+                            "match_condition": MatchConditions.IfNotModified,
+                        },
+                    ),
+                    ("create", self._to_entity(record)),
+                ]
+                if idempotency_key:
+                    operations.append(
                         (
-                            "update",
-                            updated_counter,
+                            "create",
                             {
-                                "mode": UpdateMode.REPLACE,
-                                "etag": self._entity_etag(counter),
-                                "match_condition": MatchConditions.IfNotModified,
+                                "PartitionKey": self._partition_key(caller_appid),
+                                "RowKey": self._idempotency_index_key(idempotency_key),
+                                "investigation_id": record.investigation_id,
+                                "request_fingerprint": request_fingerprint,
+                                "expires_at": record.expires_at,
                             },
-                        ),
-                        ("create", self._to_entity(record)),
-                    ]
-                )
-                return record.investigation_id
+                        )
+                    )
+                self._table.submit_transaction(operations)
+                return ReservationResult(record.investigation_id, created=True)
             except (ResourceModifiedError, TableTransactionError) as exc:
+                if (
+                    idempotency_key
+                    and isinstance(exc, TableTransactionError)
+                    and getattr(exc, "status_code", None) == 409
+                ):
+                    existing = self._get_idempotency_record(caller_appid, idempotency_key)
+                    if existing is None:
+                        raise ValueError("Idempotency reservation could not be recovered") from exc
+                    if existing.request_fingerprint != request_fingerprint:
+                        raise IdempotencyConflictError("Idempotency key was used with a different request") from exc
+                    return ReservationResult(existing.investigation_id, created=False)
                 if not self._is_concurrency_conflict(exc):
                     raise
                 telemetry.log_event("table_quota_counter_conflict", operation="reserve", attempt=_attempt + 1)
@@ -675,7 +719,7 @@ class TableStorageInvestigationRegistry:
         request_fingerprint: str = "",
         request_correlation_id: str = "",
     ) -> str:
-        investigation_id = self.reserve_investigation(
+        reservation = self.reserve_investigation(
             caller_oid,
             caller_appid,
             workload_name,
@@ -686,10 +730,22 @@ class TableStorageInvestigationRegistry:
             request_fingerprint,
             request_correlation_id,
         )
-        self.finalize_reservation(investigation_id, caller_appid, platform_thread_id)
-        return investigation_id
+        self.finalize_reservation(reservation.investigation_id, caller_appid, platform_thread_id)
+        return reservation.investigation_id
+
+    def _get_idempotency_record(self, caller_appid: str, idempotency_key: str) -> InvestigationRecord | None:
+        try:
+            index = self._table.get_entity(
+                self._partition_key(caller_appid), self._idempotency_index_key(idempotency_key)
+            )
+            return self.get_investigation(index["investigation_id"], "", caller_appid)
+        except ResourceNotFoundError:
+            return None
 
     def find_by_idempotency_key(self, caller_appid: str, idempotency_key: str) -> InvestigationRecord | None:
+        indexed_record = self._get_idempotency_record(caller_appid, idempotency_key)
+        if indexed_record is not None:
+            return indexed_record
         partition_key = self._escape_odata_string(self._partition_key(caller_appid))
         escaped_key = self._escape_odata_string(idempotency_key)
         entities = self._table.query_entities(

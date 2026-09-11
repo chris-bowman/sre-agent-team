@@ -15,6 +15,7 @@ Covers:
 import asyncio
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -641,6 +642,26 @@ def test_registry_idempotency_replays_matching_request_and_rejects_conflict(regi
     assert registry.find_by_idempotency_key("appid2", "request-1") is None
 
 
+def test_registry_concurrent_same_key_claim_creates_one_reservation(registry):
+    def reserve():
+        return registry.reserve_investigation(
+            caller_oid="oid1",
+            caller_appid="appid1",
+            workload_name="workload-a",
+            workload_identity_appid="appid1",
+            severity="high",
+            maximum_investigations=2,
+            idempotency_key="same-request",
+            request_fingerprint="same-payload",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: reserve(), range(2)))
+
+    assert sum(result.created for result in results) == 1
+    assert len({result.investigation_id for result in results}) == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["status", "summary"])
 async def test_disabled_caller_cannot_read_investigation(registry, operation):
@@ -1005,6 +1026,9 @@ def test_table_idempotency_lookup_escapes_key_and_rejects_foreign_record():
     class FakeTable:
         def __init__(self):
             self.query_filter = ""
+
+        def get_entity(self, partition_key, row_key):
+            raise ResourceNotFoundError("idempotency index not found")
 
         def query_entities(self, query_filter):
             self.query_filter = query_filter

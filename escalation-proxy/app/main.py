@@ -147,6 +147,10 @@ READINESS_CACHE_SECONDS = max(
     0,
 )
 READINESS_TIMEOUT_SECONDS = max(float(os.environ.get("READINESS_TIMEOUT_SECONDS", "15")), 0.1)
+READINESS_DEPENDENCY_TIMEOUT_SECONDS = max(
+    float(os.environ.get("READINESS_DEPENDENCY_TIMEOUT_SECONDS", "3")),
+    0.1,
+)
 EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
@@ -216,7 +220,10 @@ async def _probe_readiness_dependency() -> str | None:
         )
         for dependency, check in checks:
             try:
-                await _run_blocking_sdk_call(check)
+                await asyncio.wait_for(
+                    _run_blocking_sdk_call(check),
+                    timeout=min(READINESS_DEPENDENCY_TIMEOUT_SECONDS, READINESS_TIMEOUT_SECONDS),
+                )
             except Exception:
                 _readiness_cache = (now, dependency)
                 return dependency

@@ -1918,6 +1918,28 @@ def test_readiness_returns_safe_failure_before_application_deadline():
     assert response.json() == {"status": "not_ready"}
 
 
+def test_readiness_slices_dependency_deadlines_to_guard_cold_start_probe_budget():
+    client = TestClient(app)
+
+    def slow_policy_check():
+        time.sleep(0.3)
+
+    with (
+        patch("main.READINESS_TIMEOUT_SECONDS", 0.2),
+        patch("main.READINESS_DEPENDENCY_TIMEOUT_SECONDS", 0.05),
+        patch("main._caller_policy_store.health_check", side_effect=slow_policy_check),
+        patch("main._investigation_registry.health_check", return_value=None),
+        patch("main.get_platform_agent_token", return_value="token"),
+    ):
+        started_at = time.monotonic()
+        response = client.get("/health/ready")
+        elapsed = time.monotonic() - started_at
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+    assert elapsed < 0.35
+
+
 def test_mcp_probe_endpoint():
     """Test that MCP probe endpoint is accessible without auth."""
     client = TestClient(app)

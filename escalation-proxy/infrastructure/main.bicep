@@ -40,6 +40,10 @@ param callerPoliciesJson string = ''
 @description('Azure App Configuration store name for dynamic caller policy. The deployment script creates and seeds it before the Container App starts.')
 param appConfigurationName string = take('${proxyAppName}-config', 50)
 
+@allowed(['Developer', 'Standard', 'Premium'])
+@description('App Configuration SKU. Private Table production uses Standard or Premium because the Free tier does not support private endpoints.')
+param appConfigurationSku string = 'Standard'
+
 @description('App Configuration key containing the caller policy JSON array.')
 param callerPolicyKey string = 'escalation/caller-policies'
 
@@ -339,15 +343,66 @@ resource appConfiguration 'Microsoft.AppConfiguration/configurationStores@2024-0
   name: appConfigurationName
   location: location
   sku: {
-    name: 'free'
+    name: appConfigurationSku
   }
   properties: {
     disableLocalAuth: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: enablePrivateNetworking == 'true' && registryBackend == 'table' ? 'Disabled' : 'Enabled'
     dataPlaneProxy: {
       authenticationMode: 'Pass-through'
       privateLinkDelegation: 'Disabled'
     }
+  }
+}
+
+resource appConfigurationPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (enablePrivateNetworking == 'true' && registryBackend == 'table') {
+  name: 'privatelink.azconfig.io'
+  location: 'global'
+}
+
+resource appConfigurationPrivateDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (enablePrivateNetworking == 'true' && registryBackend == 'table') {
+  name: '${privateNetworkName}-appconfig-link'
+  parent: appConfigurationPrivateDnsZone
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: privateNetwork.id
+    }
+    registrationEnabled: false
+  }
+}
+
+resource appConfigurationPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = if (enablePrivateNetworking == 'true' && registryBackend == 'table') {
+  name: '${appConfigurationName}-pe'
+  location: location
+  properties: {
+    subnet: {
+      id: resourceId('Microsoft.Network/virtualNetworks/subnets', privateNetwork.name, 'storage-private-endpoints')
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'appconfiguration'
+        properties: {
+          privateLinkServiceId: appConfiguration.id
+          groupIds: ['configurationStores']
+        }
+      }
+    ]
+  }
+}
+
+resource appConfigurationPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = if (enablePrivateNetworking == 'true' && registryBackend == 'table') {
+  name: 'appconfiguration-dns'
+  parent: appConfigurationPrivateEndpoint
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'appconfiguration'
+        properties: {
+          privateDnsZoneId: appConfigurationPrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 

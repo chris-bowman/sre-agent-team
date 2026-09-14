@@ -14,6 +14,8 @@ The proxy requires outbound HTTPS (`TCP/443`) and successful DNS resolution for:
 
 Production Table Storage uses the `privatelink.table.core.windows.net` private zone linked to the Container Apps VNet. The storage account's public network access and shared-key access remain disabled. The Container Apps subnet uses the managed NAT gateway for public egress. Restrictive firewalls must allow the service tags or documented FQDNs required by Entra, Azure Monitor, App Configuration, and the Platform SRE Agent endpoint.
 
+Production dynamic caller policy uses an App Configuration Standard or Premium store with a `privatelink.azconfig.io` private endpoint and private DNS link in the same VNet. The Free tier does not support private endpoints and is not suitable for the private production profile. Public App Configuration access is disabled in the private profile; the proxy continues to use a bounded SDK timeout and a documented static-policy rollback only for controlled recovery.
+
 Validate DNS from the running revision whenever network policy changes. Readiness proves Table access; caller-policy and Platform SRE Agent dependencies are reported through structured events and request outcomes.
 
 ## Investigation registry metadata

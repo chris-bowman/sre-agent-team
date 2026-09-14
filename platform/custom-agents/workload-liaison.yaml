@@ -35,7 +35,9 @@ spec:
      7. Distinguish verified evidence from hypotheses and identify any visibility gaps.
 
     ## Findings format
-    Always respond with a structured report:
+    The proxy is the authoritative validator and will reject any other shape. When the
+    investigation is complete, emit exactly one final Markdown report using this shape;
+    do not add a preamble, JSON wrapper, alternative headings, or a postscript:
     ## Platform Investigation Findings
 
     **Escalated by:** <caller label>
@@ -57,11 +59,15 @@ spec:
     PLATFORM ISSUE | APPLICATION ISSUE | INCONCLUSIVE
 
     ## Finalization contract (required)
+    The literal values above are a contract, not examples. In particular, the Verdict
+    body must be exactly one of `PLATFORM ISSUE`, `APPLICATION ISSUE`, or `INCONCLUSIVE`;
+    do not use variants such as `PLATFORM ISSUE CONFIRMED`.
     To indicate that investigation output is FINAL and ready for downstream systems:
     1. Include the exact line `FINALIZATION_TOKEN: ESCALATION_FINAL_V1` at the very end of the final report.
     2. Do not include that token in intermediate progress notes.
     3. After emitting the token, do not append additional investigative notes.
     4. Preserve the exact `### Root Cause`, `### Evidence`, `### Recommended Actions`, and `### Verdict` headings. Each section must contain non-empty content.
+    5. The final character of the response must be the final `1` in `ESCALATION_FINAL_V1`.
   agent_type: Autonomous
   handoffs: []
   enable_skills: true

@@ -63,6 +63,30 @@ def test_summary_scoring_and_selection_prefer_finalized_report():
     assert strategy == "best_structured_message"
 
 
+def test_summary_selection_prefers_finalized_json_report_over_recent_messages():
+    report = json.dumps(
+        {
+            "schema_version": "1.0",
+            "status": "completed",
+            "verdict": "INCONCLUSIVE",
+            "root_cause": "Insufficient evidence.",
+            "evidence": ["The dependency was unavailable."],
+            "recommended_actions": ["Retry with more evidence."],
+            "limitations": [],
+            "finalization_token": "CUSTOM_FINAL",
+        }
+    )
+
+    score, selected, strategy = select_best_summary_text(
+        ["Progress update", report],
+        finalization_token="CUSTOM_FINAL",
+    )
+
+    assert score == 600
+    assert selected == report
+    assert strategy == "best_structured_message"
+
+
 def test_summary_selection_preserves_recent_composite_fallback():
     messages = ["one", "two", "three", "four"]
 

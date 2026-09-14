@@ -46,6 +46,13 @@ def summary_candidate_score(
     if not content:
         return -1
 
+    try:
+        report = LiaisonFinalReport.model_validate_json(content)
+        if report.finalization_token == finalization_token:
+            return 600
+    except (ValidationError, ValueError, TypeError):
+        pass
+
     lower = content.lower()
     score = 0
 

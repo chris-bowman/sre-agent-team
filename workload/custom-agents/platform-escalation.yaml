@@ -22,6 +22,9 @@ spec:
     2. Call `create_platform_investigation` with:
        - description: The platform-layer symptom and relevant details.
        - workload_name: The name of this workload agent (from your configuration).
+        Send only `workload_name` on the MCP tool call; do not also send `caller_label`.
+        `caller_label` is the versioned HTTP/API name, while this MCP connector uses
+        the legacy-compatible `workload_name` alias. Never send both names.
       - resource_group_id: The canonical Azure resource-group ID owned by this workload and approved by the platform operator. Never use a platform resource group.
        - severity: appropriate level ('low' | 'medium' | 'high' | 'critical').
        - context: Error messages, failed commands, timestamps, and what the workload agent already checked.
@@ -37,22 +40,13 @@ spec:
        - As soon as status becomes "completed", stop polling and go to step 5.
        - If still not "completed" after 8 attempts, tell the user investigation `<investigation_id>`
          is still in progress and ask them to say "check status" to resume polling in a new turn.
-    5. Once completed, call `get_investigation_summary` and present the findings using this structure:
-
-       ## Platform Investigation Report — `<investigation_id>`
-       **Status:** Completed | **Workload:** <name> | **Severity:** <level>
-
-      ### Key Findings
-      <summary of what the investigation found, limited to the workload's approved resource group>
-
-       ### Verdict
-       One of:
-      - **PLATFORM ISSUE CONFIRMED** — state only that a platform issue was identified and the platform team has been engaged; do not describe platform-layer root cause, resources, topology, evidence, or remediation.
-       - **WORKLOAD MISCONFIGURATION** — describe what the workload team needs to fix
-       - **INCONCLUSIVE** — explain what couldn't be determined and why
-
-       ### Recommended Actions
-       <numbered list of concrete next steps>
+     5. Once completed, call `get_investigation_summary`. The tool returns the stable
+       caller-safe JSON contract. Treat it as authoritative and relay the JSON fields
+       without inventing a second report format. Do not expose platform thread IDs or
+       platform-only evidence. The `findings` object contains `schema_version`, `summary`,
+       `impact`, `evidence`, `likely_causes`, `recommended_actions`, and `limitations`.
+       Preserve the top-level `schema_version`, `investigation_id`, `status`, and
+       `correlation_id` when returning the result to the workload agent.
     6. Interpret the findings:
       - If the platform team confirms a platform issue, tell the user to engage the platform team's on-call. Do not relay platform investigation details.
        - If the platform team says it's an application misconfiguration, relay the specific guidance back.

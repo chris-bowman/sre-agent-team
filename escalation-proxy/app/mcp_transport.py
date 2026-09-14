@@ -95,7 +95,13 @@ def create_mcp_app():
         context: str = "",
         workload_name: str = "",
     ) -> dict[str, Any]:
-        """Create an investigation through the Platform Escalation Service."""
+        """Create an investigation through the Platform Escalation Service.
+
+        For MCP callers, provide exactly one display label: prefer the legacy-compatible
+        ``workload_name`` field used by the reference workload agent. ``caller_label``
+        remains available for generic callers, but sending both fields with different
+        values is rejected to prevent ambiguous request metadata.
+        """
         from main import CreateInvestigationRequest, _create_investigation_impl
 
         if caller_label and workload_name and caller_label != workload_name:

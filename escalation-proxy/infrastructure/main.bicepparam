@@ -37,8 +37,8 @@ param sreAgentAdminRoleDefinitionId = '<FILL_IN: GUID from az role definition li
 param storageTableDataContributorRoleDefinitionId = '<FILL_IN: GUID from az role definition list>'
 
 // Investigation registry backend: 'table' (Azure Table Storage) or 'memory'.
-// Use 'memory' if tenant policy forces the registry storage account's
-// publicNetworkAccess off and no private endpoint is configured yet.
+// Table mode uses the private networking profile by default. Use 'memory' for
+// local or non-production smoke tests without shared Table infrastructure.
 // deploy-escalation-proxy.ps1 -RegistryBackend overrides this value.
 param registryBackend = 'table'
 

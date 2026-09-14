@@ -75,7 +75,7 @@ param registryBackend string = 'table'
 
 @allowed(['true', 'false'])
 @description('Enable VNet integration and private Table endpoint networking for production Table mode.')
-param enablePrivateNetworking string = 'false'
+param enablePrivateNetworking string = 'true'
 
 @description('Name of the VNet created for the private production profile.')
 param privateNetworkName string = '${proxyAppName}-vnet'
@@ -142,6 +142,10 @@ param readinessCacheSeconds int = 5
 @minValue(1)
 @description('Application deadline in seconds for one readiness dependency evaluation.')
 param readinessTimeoutSeconds int = 15
+
+@minValue(1)
+@description('Maximum seconds allowed for one blocking readiness dependency call.')
+param readinessDependencyTimeoutSeconds int = 3
 
 @minValue(1)
 @description('Container Apps timeout in seconds for the readiness HTTP probe. Must exceed readinessTimeoutSeconds.')
@@ -453,6 +457,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS', value: platformRequestQueueTimeoutSeconds }
             { name: 'READINESS_CACHE_SECONDS', value: string(readinessCacheSeconds) }
             { name: 'READINESS_TIMEOUT_SECONDS', value: string(readinessTimeoutSeconds) }
+            { name: 'READINESS_DEPENDENCY_TIMEOUT_SECONDS', value: string(readinessDependencyTimeoutSeconds) }
             { name: 'MAX_PLATFORM_RESPONSE_BYTES', value: string(maxPlatformResponseBytes) }
             { name: 'MAX_AGENT_MESSAGES', value: string(maxAgentMessages) }
             { name: 'MIN_SUMMARY_POLL_INTERVAL_SECONDS', value: string(minSummaryPollIntervalSeconds) }

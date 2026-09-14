@@ -357,9 +357,17 @@ class TableStorageInvestigationRegistry:
         return value.replace("'", "''")
 
     @staticmethod
+    def _table_error_status_code(error: Exception) -> int | None:
+        status_code = getattr(error, "status_code", None)
+        if status_code is None:
+            status_code = getattr(getattr(error, "response", None), "status_code", None)
+        return status_code
+
+    @staticmethod
     def _is_concurrency_conflict(error: Exception) -> bool:
         return isinstance(error, ResourceModifiedError) or (
-            isinstance(error, TableTransactionError) and getattr(error, "status_code", None) == 412
+            isinstance(error, TableTransactionError)
+            and TableStorageInvestigationRegistry._table_error_status_code(error) == 412
         )
 
     def _delete_entity_if_unchanged(self, entity: dict[str, Any]) -> None:
@@ -591,7 +599,7 @@ class TableStorageInvestigationRegistry:
                 if (
                     idempotency_key
                     and isinstance(exc, TableTransactionError)
-                    and getattr(exc, "status_code", None) == 409
+                    and self._table_error_status_code(exc) == 409
                 ):
                     existing = self._get_idempotency_record(caller_appid, idempotency_key)
                     if existing is None:

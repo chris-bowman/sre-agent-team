@@ -26,6 +26,7 @@ import jwt as pyjwt
 import pytest
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError
+from azure.data.tables import TableTransactionError
 from azure.data.tables._deserialize import _convert_to_entity
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -1286,6 +1287,23 @@ def test_table_registry_rejects_missing_etag_for_conditional_mutation():
         TableStorageInvestigationRegistry._entity_etag({"PartitionKey": "appid1", "RowKey": "investigation1"})
 
 
+@pytest.mark.parametrize("status_code, expected", [(412, True), (409, False), (500, False)])
+def test_table_transaction_error_conflict_classification_uses_sdk_status(status_code, expected):
+    error = TableTransactionError(message="transaction failed")
+    error.response = MagicMock(status_code=status_code)
+
+    assert TableStorageInvestigationRegistry._is_concurrency_conflict(error) is expected
+
+
+def test_table_transaction_error_idempotency_race_uses_response_status():
+    error = TableTransactionError(message="transaction failed")
+    error.response = MagicMock(status_code=409)
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+
+    assert registry._table_error_status_code(error) == 409
+
+
 def test_table_summary_poll_uses_conditional_update():
     record = InvestigationRecord(
         investigation_id="investigation1",
@@ -1916,6 +1934,28 @@ def test_readiness_returns_safe_failure_before_application_deadline():
 
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready"}
+
+
+def test_readiness_timeout_cancels_probe_task():
+    client = TestClient(app)
+    cancelled = threading.Event()
+
+    async def cancelled_probe():
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    with (
+        patch("main.READINESS_TIMEOUT_SECONDS", 0.01),
+        patch("main._probe_readiness_dependency", side_effect=cancelled_probe),
+    ):
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+    assert cancelled.wait(timeout=1)
 
 
 def test_readiness_slices_dependency_deadlines_to_guard_cold_start_probe_budget():

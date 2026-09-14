@@ -37,7 +37,10 @@ Use the canonical trailing-slash MCP endpoint (`https://<proxy-host>/mcp/`) for 
 Production deployments use Azure Table Storage through the proxy's user-assigned
 managed identity. The infrastructure creates the table-capable storage account,
 sets `REGISTRY_BACKEND=table`, and assigns only `Storage Table Data Contributor`
-at that account scope. Local tests use `REGISTRY_BACKEND=memory` by default.
+at that account scope. Table deployments require the private VNet, private endpoint,
+and private DNS profile; the supported deployment script rejects Table mode without
+`-EnablePrivateNetworking`. Local tests and smoke containers use `REGISTRY_BACKEND=memory`
+by default.
 
 In the current staging subscription, management-group policy
 `MCAPSGovDeployPolicies` applies `StorageAccount_PublicNetwork_Modify` and forces

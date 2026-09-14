@@ -547,7 +547,7 @@ async def readiness_check():
     """Report whether required policy, registry, and platform dependencies are usable."""
     try:
         failed_dependency = await asyncio.wait_for(
-            asyncio.shield(_probe_readiness_dependency()),
+            _probe_readiness_dependency(),
             timeout=READINESS_TIMEOUT_SECONDS,
         )
     except TimeoutError:

@@ -93,6 +93,9 @@ if ($MaxReplicas -lt $MinReplicas) {
 if ($CallerPolicyMaxStalenessSeconds -lt $CallerPolicyRefreshSeconds) {
     throw 'CallerPolicyMaxStalenessSeconds must be greater than or equal to CallerPolicyRefreshSeconds.'
 }
+if ($RegistryBackend -eq 'table' -and -not $EnablePrivateNetworking) {
+    throw "Table registry deployments require -EnablePrivateNetworking. Use -RegistryBackend memory for local or non-production smoke tests."
+}
 if ($ReadinessProbeTimeoutSeconds -le $ReadinessTimeoutSeconds) {
     throw 'ReadinessProbeTimeoutSeconds must be greater than ReadinessTimeoutSeconds.'
 }
@@ -231,8 +234,6 @@ if ($RegistryBackend -eq 'table') {
             $PrivateNetworkName = "${ProxyAppName}-vnet"
         }
         Write-Host "Private networking enabled: Container Apps VNet integration, Storage Table private endpoint, and private DNS will be deployed." -ForegroundColor Green
-    } else {
-        Write-Host "NOTE: 'table' without -EnablePrivateNetworking requires public Storage network access. Some tenant policies force it off, which fails create/status/summary calls at runtime." -ForegroundColor Yellow
     }
 }
 

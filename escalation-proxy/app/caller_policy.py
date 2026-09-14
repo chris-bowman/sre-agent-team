@@ -129,6 +129,7 @@ class RefreshingCallerPolicyStore:
         maximum_staleness_seconds: float,
         event_sink: Callable[..., None],
         client: AzureAppConfigurationClient | None = None,
+        request_timeout_seconds: float = 3.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._key = key
@@ -137,7 +138,12 @@ class RefreshingCallerPolicyStore:
         self._refresh_interval_seconds = refresh_interval_seconds
         self._maximum_staleness_seconds = maximum_staleness_seconds
         self._event_sink = event_sink
-        self._client = client or AzureAppConfigurationClient(endpoint, DefaultAzureCredential())
+        self._client = client or AzureAppConfigurationClient(
+            endpoint,
+            DefaultAzureCredential(),
+            connection_timeout=request_timeout_seconds,
+            read_timeout=request_timeout_seconds,
+        )
         self._clock = clock
         self._store: CallerPolicyStore | None = None
         self._etag: Any = None

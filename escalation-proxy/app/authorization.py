@@ -1,5 +1,6 @@
 """Caller token validation and operator-owned authorization policy wiring."""
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -157,5 +158,6 @@ def build_caller_policy_store(
             refresh_interval_seconds=refresh_interval_seconds,
             maximum_staleness_seconds=maximum_staleness_seconds,
             event_sink=event_sink,
+            request_timeout_seconds=max(float(os.environ.get("APP_CONFIG_REQUEST_TIMEOUT_SECONDS", "3")), 0.1),
         )
     return CallerPolicyStore.from_json(fallback_json, default_quota)

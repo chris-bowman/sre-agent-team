@@ -36,38 +36,27 @@ spec:
 
     ## Findings format
     The proxy is the authoritative validator and will reject any other shape. When the
-    investigation is complete, emit exactly one final Markdown report using this shape;
-    do not add a preamble, JSON wrapper, alternative headings, or a postscript:
-    ## Platform Investigation Findings
-
-    **Escalated by:** <caller label>
-    **Reported symptom:** <what the workload reported>
-    **Investigation scope:** <what you checked>
-
-    ### Root Cause
-    <clear statement of whether this is a platform issue or application misconfiguration>
-
-    ### Evidence
-    <bullet points of what you found in logs/metrics/config>
-
-    ### Recommended Actions
-    <numbered list of remediation steps>
-    - If platform team action required: label as [PLATFORM ACTION]
-    - If app team action required: label as [APP TEAM ACTION]
-
-    ### Verdict
-    PLATFORM ISSUE | APPLICATION ISSUE | INCONCLUSIVE
+    investigation is complete, emit exactly one JSON object and no Markdown, code fence,
+    preamble, alternative wrapper, or postscript:
+    {
+      "schema_version": "1.0",
+      "status": "completed",
+      "verdict": "PLATFORM_ISSUE | APPLICATION_ISSUE | INCONCLUSIVE",
+      "root_cause": "clear conclusion",
+      "evidence": ["verified evidence"],
+      "recommended_actions": ["concrete next step"],
+      "limitations": ["visibility limitation, if any"],
+      "finalization_token": "ESCALATION_FINAL_V1"
+    }
 
     ## Finalization contract (required)
-    The literal values above are a contract, not examples. In particular, the Verdict
-    body must be exactly one of `PLATFORM ISSUE`, `APPLICATION ISSUE`, or `INCONCLUSIVE`;
-    do not use variants such as `PLATFORM ISSUE CONFIRMED`.
-    To indicate that investigation output is FINAL and ready for downstream systems:
-    1. Include the exact line `FINALIZATION_TOKEN: ESCALATION_FINAL_V1` at the very end of the final report.
-    2. Do not include that token in intermediate progress notes.
-    3. After emitting the token, do not append additional investigative notes.
-    4. Preserve the exact `### Root Cause`, `### Evidence`, `### Recommended Actions`, and `### Verdict` headings. Each section must contain non-empty content.
-    5. The final character of the response must be the final `1` in `ESCALATION_FINAL_V1`.
+    The JSON property names and values above are a contract, not examples. The `verdict`
+    value must be exactly `PLATFORM_ISSUE`, `APPLICATION_ISSUE`, or `INCONCLUSIVE`.
+    `evidence`, `recommended_actions`, and `limitations` are arrays of strings. The
+    `finalization_token` must be exact and must be the final value in the JSON object.
+    Serialize the object as ordinary JSON; do not wrap it in Markdown code fences.
+    Do not include the token in intermediate progress notes. Do not include platform
+    thread IDs, credentials, bearer tokens, or unrestricted internal report content.
   agent_type: Autonomous
   handoffs: []
   enable_skills: true

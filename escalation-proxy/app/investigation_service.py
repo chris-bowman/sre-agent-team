@@ -12,6 +12,7 @@ from authorization import CallerIdentity
 from contracts import (
     CreateInvestigationRequest,
     GetInvestigationRequest,
+    InvestigationFindings,
     InvestigationFindingsResponse,
     InvestigationLifecycleResponse,
     RedactedSummaryResponse,
@@ -562,14 +563,14 @@ class InvestigationService:
             verdict = "INCONCLUSIVE"
             summary = "The platform investigation was inconclusive. Engage the platform team for next steps."
             action = "Engage the platform team's on-call or support process."
-        return {
-            "summary": summary,
-            "impact": verdict,
-            "evidence": [],
-            "likely_causes": [],
-            "recommended_actions": [action],
-            "limitations": ["Platform investigation details are restricted to the platform team."],
-        }
+        return InvestigationFindings(
+            summary=summary,
+            impact=verdict,
+            evidence=[],
+            likely_causes=[],
+            recommended_actions=[action],
+            limitations=["Platform investigation details are restricted to the platform team."],
+        ).model_dump()
 
     async def v1_lifecycle_response(
         self, investigation_id: str, status: str, caller: CallerIdentity

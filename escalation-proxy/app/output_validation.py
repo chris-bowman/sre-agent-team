@@ -1,5 +1,10 @@
+import json
 import re
 from typing import Any, Callable
+
+from pydantic import ValidationError
+
+from contracts import LiaisonFinalReport
 
 DEFAULT_FINALIZATION_TOKEN = "ESCALATION_FINAL_V1"
 DEFAULT_REQUIRE_FINALIZATION_TOKEN = True
@@ -102,6 +107,11 @@ def is_finalized_summary(
     require_finalization_token: bool = DEFAULT_REQUIRE_FINALIZATION_TOKEN,
     finalization_token: str = DEFAULT_FINALIZATION_TOKEN,
 ) -> bool:
+    try:
+        report = LiaisonFinalReport.model_validate_json(selected_text)
+        return report.finalization_token == finalization_token
+    except (ValidationError, ValueError, TypeError):
+        pass
     if require_finalization_token:
         return bool(
             re.search(
@@ -116,7 +126,42 @@ def parse_finalized_findings(
     report: str,
     finalization_token: str = DEFAULT_FINALIZATION_TOKEN,
 ) -> dict[str, Any] | None:
-    """Parse a final Markdown report into the public allowlisted schema."""
+    """Parse a final JSON liaison report, with Markdown migration fallback."""
+    json_findings = parse_json_finalized_findings(report, finalization_token)
+    if json_findings is not None:
+        return json_findings
+
+    return _parse_markdown_finalized_findings(report, finalization_token)
+
+
+def parse_json_finalized_findings(
+    report: str,
+    finalization_token: str = DEFAULT_FINALIZATION_TOKEN,
+) -> dict[str, Any] | None:
+    """Validate the private liaison JSON and project it to the public findings shape."""
+    try:
+        liaison_report = LiaisonFinalReport.model_validate_json(report.strip())
+    except (ValidationError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if liaison_report.finalization_token != finalization_token:
+        return None
+    verdict = liaison_report.verdict.replace("_", " ")
+    return {
+        "summary": liaison_report.root_cause,
+        "impact": verdict,
+        "evidence": liaison_report.evidence,
+        "likely_causes": [liaison_report.root_cause],
+        "recommended_actions": liaison_report.recommended_actions,
+        "limitations": liaison_report.limitations
+        or ["Findings are investigation guidance; the proxy performed no remediation."],
+    }
+
+
+def _parse_markdown_finalized_findings(
+    report: str,
+    finalization_token: str,
+) -> dict[str, Any] | None:
+    """Temporary v1 migration parser for reports produced before JSON rollout."""
     if not re.search(
         rf"(?i)(?:^|\n)FINALIZATION_TOKEN:\s*{re.escape(finalization_token)}\s*\Z",
         report.strip(),

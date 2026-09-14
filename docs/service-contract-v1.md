@@ -24,6 +24,11 @@ The Platform Escalation Service lets an authorized external agent request an inv
 
 The service owns the mapping from public investigation IDs to private Platform SRE Agent thread IDs. Callers never receive or address platform thread IDs directly.
 
+The service has two JSON boundaries. The Platform SRE Agent liaison produces a private,
+versioned JSON report that the proxy validates. The proxy then projects that report into
+the separate caller-safe JSON findings contract below. Callers must depend only on the
+caller-safe contract, never on liaison fields such as root cause or platform evidence.
+
 ### Supported Operations
 
 | Capability | v1 support | Notes |
@@ -164,6 +169,28 @@ Creation and status retrieval return the same canonical lifecycle shape:
 | `failure` | problem object | No | Present only when `status` is `failed`. |
 
 ### Investigation Findings Response
+
+The private liaison-to-proxy report is validated before this response is produced:
+
+```json
+{
+  "schema_version": "1.0",
+  "status": "completed",
+  "verdict": "PLATFORM_ISSUE",
+  "root_cause": "Private DNS link is missing.",
+  "evidence": ["The zone link is absent."],
+  "recommended_actions": ["Restore the zone link."],
+  "limitations": ["No remediation was performed."],
+  "finalization_token": "ESCALATION_FINAL_V1"
+}
+```
+
+This internal report is not returned to callers. The proxy rejects unknown fields,
+unsupported verdicts, missing required arrays, invalid schema versions, and incorrect
+finalization tokens. A temporary Markdown parser remains for migration of older platform
+threads, but new liaison definitions must emit JSON.
+
+The caller-safe response is the public contract:
 
 ```json
 {

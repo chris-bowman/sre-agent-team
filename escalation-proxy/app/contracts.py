@@ -7,12 +7,27 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 CONTRACT_SCHEMA_VERSION: Literal["1.0"] = "1.0"
+LIAISON_REPORT_SCHEMA_VERSION: Literal["1.0"] = "1.0"
 InvestigationStatus = Literal["pending", "running", "completed", "failed", "expired"]
 Severity = Literal["low", "medium", "high", "critical"]
+LiaisonVerdict = Literal["PLATFORM_ISSUE", "APPLICATION_ISSUE", "INCONCLUSIVE"]
 
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class LiaisonFinalReport(ContractModel):
+    """Private platform-to-proxy report contract; never return this directly."""
+
+    schema_version: Literal["1.0"] = LIAISON_REPORT_SCHEMA_VERSION
+    status: Literal["completed"]
+    verdict: LiaisonVerdict
+    root_cause: str = Field(min_length=1, max_length=10000)
+    evidence: list[str] = Field(min_length=1, max_length=100)
+    recommended_actions: list[str] = Field(min_length=1, max_length=100)
+    limitations: list[str] = Field(default_factory=list, max_length=100)
+    finalization_token: str = Field(min_length=1, max_length=128)
 
 
 class CreateInvestigationV1Request(ContractModel):

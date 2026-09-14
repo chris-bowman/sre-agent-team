@@ -1,9 +1,11 @@
+import json
 from unittest.mock import MagicMock
 
 from output_validation import (
     is_finalized_summary,
     normalize_status_value,
     parse_finalized_findings,
+    parse_json_finalized_findings,
     redact_sensitive_text,
     select_best_summary_text,
     summary_candidate_score,
@@ -82,6 +84,23 @@ def test_finalized_summary_uses_explicit_token_requirement():
     )
 
 
+def test_finalized_json_report_is_recognized_by_token():
+    report = json.dumps(
+        {
+            "schema_version": "1.0",
+            "status": "completed",
+            "verdict": "INCONCLUSIVE",
+            "root_cause": "Insufficient evidence.",
+            "evidence": ["The dependency was unavailable."],
+            "recommended_actions": ["Retry with more evidence."],
+            "limitations": [],
+            "finalization_token": "CUSTOM_FINAL",
+        }
+    )
+
+    assert is_finalized_summary(0, report, finalization_token="CUSTOM_FINAL")
+
+
 def test_parse_finalized_findings_preserves_public_schema():
     report = """## Platform Investigation Findings
 ### Root Cause
@@ -117,3 +136,43 @@ UNKNOWN OWNER
 FINALIZATION_TOKEN: CUSTOM_FINAL"""
 
     assert parse_finalized_findings(report, finalization_token="CUSTOM_FINAL") is None
+
+
+def test_parse_json_finalized_findings_projects_private_report_to_public_shape():
+    report = """{
+      "schema_version": "1.0",
+      "status": "completed",
+      "verdict": "PLATFORM_ISSUE",
+      "root_cause": "Private DNS link is missing.",
+      "evidence": ["The zone link is absent."],
+      "recommended_actions": ["Restore the zone link."],
+      "limitations": ["No remediation was performed."],
+      "finalization_token": "CUSTOM_FINAL"
+    }"""
+
+    assert parse_json_finalized_findings(report, finalization_token="CUSTOM_FINAL") == {
+        "summary": "Private DNS link is missing.",
+        "impact": "PLATFORM ISSUE",
+        "evidence": ["The zone link is absent."],
+        "likely_causes": ["Private DNS link is missing."],
+        "recommended_actions": ["Restore the zone link."],
+        "limitations": ["No remediation was performed."],
+    }
+
+
+def test_json_finalized_findings_rejects_extra_fields_and_wrong_token():
+    base = {
+        "schema_version": "1.0",
+        "status": "completed",
+        "verdict": "INCONCLUSIVE",
+        "root_cause": "Insufficient evidence.",
+        "evidence": ["The dependency was unavailable."],
+        "recommended_actions": ["Retry with more evidence."],
+        "limitations": [],
+        "finalization_token": "WRONG",
+    }
+
+    assert parse_json_finalized_findings(json.dumps(base), finalization_token="CUSTOM_FINAL") is None
+    base["finalization_token"] = "CUSTOM_FINAL"
+    base["private_thread_id"] = "must-not-pass"
+    assert parse_json_finalized_findings(json.dumps(base), finalization_token="CUSTOM_FINAL") is None

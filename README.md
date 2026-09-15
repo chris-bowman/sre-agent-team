@@ -221,8 +221,10 @@ application registrations.
 The script resolves the **SRE Agent Administrator** role GUID automatically and passes it
 to Bicep. Outputs `PROXY_ENDPOINT_URL` and `PROXY_ENTRA_CLIENT_ID` are saved to state.
 For an existing app, the script requires the latest ready revision to be active before it
-builds a replacement. It also waits for App Configuration data-plane RBAC propagation before
-seeding the initial caller policy. A timeout leaves the active Container App revision unchanged.
+builds a replacement. For a new store it waits for App Configuration data-plane RBAC
+propagation before seeding the initial caller policy. For an existing private store it
+preserves the existing policy without requiring public workstation data-plane access.
+A timeout leaves the active Container App revision unchanged.
 
 ### 4. App team: Deploy Workload SRE Agent
 

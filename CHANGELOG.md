@@ -10,10 +10,17 @@ All notable changes to this project are documented here. The project follows Kee
 - Bounded offloading for JWT/JWKS, managed identity, App Configuration, and Table SDK calls, plus bounded Platform SRE Agent request admission.
 - Cached and coalesced readiness dependency checks to prevent public probe amplification.
 - Persisted summary polling limits plus explicit platform-response and message-processing bounds.
+- Private App Configuration networking for the production Table profile: Standard tier, private endpoint, `privatelink.azconfig.io` DNS, and disabled public access.
 
-### Known Issues
+### Changed
 
-- Cold live readiness checks can exceed the Container Apps probe budget and cause revision restart loops. The proxy is scaled to zero at the weekend checkpoint pending diagnosis; P12.1 remains open.
+- The private Platform SRE Agent liaison report is a strict finalized Markdown contract; the proxy validates it and projects the separate stable caller-safe JSON findings contract for MCP and HTTP consumers.
+- Routine proxy deployment preserves an existing private App Configuration policy without requiring public workstation data-plane access.
+
+### Fixed
+
+- App Configuration policy reads now use bounded transport timeouts, preventing blocked readiness work from exhausting proxy workers.
+- Finalized liaison reports are recognized from platform-thread messages even when the platform thread retains a stale `running` status.
 
 ### Security
 

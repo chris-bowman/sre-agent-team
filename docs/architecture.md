@@ -29,6 +29,8 @@ flowchart TB
     subgraph PlatformLZ["Platform Scope (subscription or MG)"]
         EP["Platform Escalation Service\n(Azure Container App)\nMCP + HTTP"]
         EP_MI["Proxy MI Permissions:\n• SRE Agent Administrator\n  on Platform Agent ONLY"]
+        APPC["Azure App Configuration\nStandard tier\nCaller policy"]
+        TABLE["Azure Table Storage\nInvestigation registry"]
         PA["Platform SRE Agent\n(Microsoft.App/agents)\nSystem-Assigned MI"]
         PA_MI["MI Permissions:\n• Reader + Monitoring Reader\n  on Platform scope\n• No extra app access unless granted"]
     end
@@ -37,6 +39,8 @@ flowchart TB
     CA -->|MCP or HTTP\nEntra token with EscalationCaller| EP
     WA -->|MCP reference flow| EP
     EP -->|Validates token, caller policy\nand ownership| EP
+    EP -->|Private Endpoint + DNS\nprivatelink.azconfig.io| APPC
+    EP -->|Private Endpoint + DNS\nprivatelink.table.core.windows.net| TABLE
     EP -->|REST API\nMI token| PA
     PA --> PA_MI
 
@@ -59,7 +63,7 @@ sequenceDiagram
     WA->>WA: Checks app health, NSGs, Private Endpoints — all OK
     WA->>WA: Suspects platform issue (DNS / Firewall / peering)
     WA->>PEA: /agent platform-escalation
-    PEA->>Proxy: create_platform_investigation(description, workload, severity, context)
+    PEA->>Proxy: create_platform_investigation(description, workload_name, resource_group_id, severity, context)
     Proxy->>Proxy: Validates Entra token + EscalationCaller role
     Proxy->>PA: POST /api/v1/threads (MI token, StartMessage.Text)
     PA-->>Proxy: { id: "abc123" }
@@ -78,9 +82,9 @@ sequenceDiagram
 
     PEA->>Proxy: get_investigation_summary("abc123")
     Proxy->>PA: GET /api/v1/threads/abc123/messages
-    PA-->>Proxy: [detailed findings markdown in platform-owned thread]
-    Proxy->>Proxy: Validate final report and map verdict to fixed public response
-    Proxy-->>PEA: { summary: "A platform issue was identified. Engage the platform team." }
+    PA-->>Proxy: Strict finalized Markdown report in platform-owned thread
+    Proxy->>Proxy: Validate report + finalization token; redact and map verdict
+    Proxy-->>PEA: Caller-safe JSON findings response
     PEA->>U: Presents caller-safe ownership and handoff guidance
 ```
 

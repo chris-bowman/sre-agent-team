@@ -14,7 +14,7 @@ The proxy requires outbound HTTPS (`TCP/443`) and successful DNS resolution for:
 
 Production Table Storage uses the `privatelink.table.core.windows.net` private zone linked to the Container Apps VNet. The storage account's public network access and shared-key access remain disabled. The Container Apps subnet uses the managed NAT gateway for public egress. Restrictive firewalls must allow the service tags or documented FQDNs required by Entra, Azure Monitor, App Configuration, and the Platform SRE Agent endpoint.
 
-Production dynamic caller policy uses an App Configuration Standard or Premium store with a `privatelink.azconfig.io` private endpoint and private DNS link in the same VNet. The Free tier does not support private endpoints and is not suitable for the private production profile. Public App Configuration access is disabled in the private profile; the proxy continues to use a bounded SDK timeout and a documented static-policy rollback only for controlled recovery.
+Production dynamic caller policy uses an App Configuration Standard or Premium store with a `privatelink.azconfig.io` private endpoint and private DNS link in the same VNet. The Free tier does not support private endpoints and is not suitable for the private production profile. Public App Configuration access is disabled in the private profile; the proxy uses bounded SDK timeouts, and the static-policy path is recovery-only.
 
 Validate DNS from the running revision whenever network policy changes. Readiness proves Table access; caller-policy and Platform SRE Agent dependencies are reported through structured events and request outcomes.
 
@@ -112,9 +112,9 @@ The deployment creates separate five-minute alerts for policy/readiness failures
 
 ## Caller policy recovery
 
-Azure App Configuration retains key-value revision history. Caller writes use the loaded ETag, so concurrent updates fail instead of overwriting another operator's change. To roll back, select the previous revision value in App Configuration and write it as the current value with the active label. Confirm a `caller_policy_snapshot_updated` event and run `manage-escalation-callers.ps1 -Operation List`.
+Azure App Configuration retains key-value revision history. Caller writes use the loaded ETag, so concurrent updates fail instead of overwriting another operator's change. To roll back, select the previous revision value in App Configuration and write it as the current value with the active label. Confirm a `caller_policy_snapshot_updated` event and run `manage-escalation-callers.ps1 -Operation List` from an operator environment with private connectivity to the App Configuration endpoint. Public workstation access is expected to receive a network-policy `403`.
 
-The `CALLER_POLICIES_JSON` Container App variable remains only as a rollback compatibility path when `APP_CONFIG_ENDPOINT` is absent. Do not use both sources operationally; App Configuration takes precedence.
+The `CALLER_POLICIES_JSON` Container App variable remains only as a rollback compatibility path when `APP_CONFIG_ENDPOINT` is absent. Do not use both sources operationally; App Configuration takes precedence. Before using the fallback, capture the current policy through an approved private operator path and restore `APP_CONFIG_ENDPOINT` as soon as the private dependency is repaired.
 
 ## Resource-group caller scopes
 

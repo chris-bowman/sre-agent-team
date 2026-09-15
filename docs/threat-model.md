@@ -1,6 +1,6 @@
 # Escalation Proxy Threat Model
 
-Last reviewed: 2026-09-11
+Last reviewed: 2026-09-15
 
 ## Scope
 
@@ -19,6 +19,7 @@ proxy's managed identity can call the platform agent.
 | Platform agent privileges | Least privilege and resource scoping |
 | Audit events | Integrity, availability, and useful retention |
 | Workload resource data | Access only within declared resource groups |
+| Caller policy | Fresh, operator-owned authorization state and availability |
 
 ## Trust Boundaries
 
@@ -29,6 +30,8 @@ proxy's managed identity can call the platform agent.
    Monitoring Reader roles only in the configured resource groups.
 4. Proxy to telemetry: operational logs must not contain credentials or raw
    bearer tokens.
+5. Proxy to App Configuration and Table Storage: private endpoints and private
+  DNS resolve policy and registry traffic inside the proxy VNet.
 
 ## Threats and Controls
 
@@ -48,6 +51,7 @@ proxy's managed identity can call the platform agent.
 | Caller requests an unrelated resource group | App Configuration policy contains canonical `allowed_resource_groups`; each create request supplies one authorized group and is denied before platform access when it is not allowlisted | This routing boundary does not reduce the privileged platform agent's underlying Azure RBAC |
 | Platform details disclosed to a workload caller | Finalized structured output and verdict are validated centrally; every verdict is replaced with fixed proxy-authored ownership and handoff guidance | Detailed findings remain sensitive platform-thread data and require protected operator access |
 | Event-loop starvation | JWT/JWKS, managed identity, App Configuration, and Table calls use a bounded offloader; upstream platform calls have bounded per-replica admission and queue time | Limits are per replica rather than globally distributed |
+| Policy-store public-path outage | Standard-tier App Configuration private endpoint, `privatelink.azconfig.io` private DNS, disabled public access, bounded SDK timeouts, and readiness checks | Policy changes require an operator path with private connectivity; the static fallback is recovery-only |
 
 ## Security Invariants
 
@@ -62,6 +66,8 @@ proxy's managed identity can call the platform agent.
   recording secrets.
 - A new investigation names exactly one operator-allowlisted workload resource
   group. Platform-owned outcomes disclose only a generic handoff to the caller.
+- The liaison emits a strict terminal Markdown report with the finalization token;
+  the proxy validates it and returns only caller-safe JSON.
 
 ## Verification Plan
 

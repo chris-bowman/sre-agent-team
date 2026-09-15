@@ -57,8 +57,10 @@ counting, and atomic status-poll updates.
 
 ### Required operator access
 
-Caller administration requires Azure CLI authentication in the proxy tenant and permissions
-to read the Container App and manage app-role assignments on the proxy service principal.
+Caller administration requires Azure CLI authentication in the proxy tenant, permissions
+to read the Container App and manage app-role assignments on the proxy service principal,
+and private network access to the App Configuration endpoint when the private production
+profile has public access disabled.
 The proxy coordinates are read from `scripts/.deploy-state.json` when available. For a
 different machine or environment, pass all four explicitly:
 
@@ -236,7 +238,7 @@ For a production Table-backed deployment in a tenant that disables public Storag
 	-EnablePrivateNetworking
 ```
 
-The profile creates a delegated Container Apps infrastructure subnet, a private-endpoint subnet, the `privatelink.table.core.windows.net` zone and link, and a Table private endpoint. The default remains opt-in so memory-backed staging deployments do not create networking resources. Validate the resulting Container App readiness and a complete create/status/summary lifecycle before scaling beyond one replica.
+The profile creates a delegated Container Apps infrastructure subnet, a private-endpoint subnet, `privatelink.table.core.windows.net` and `privatelink.azconfig.io` zones and links, plus private endpoints for the Table registry and Standard-tier App Configuration policy store. Table mode requires this profile; use memory mode only for local or non-production smoke tests. Validate the resulting Container App readiness and a complete create/status/summary lifecycle before scaling beyond one replica.
 
 The `false` protection setting is currently required for this Azure SRE connector test because the MCP SDK rejects the Container Apps host header even when the exact hostname is allowlisted. Treat this as diagnostic-only; restore `-McpEnableDnsRebindingProtection true` after resolving the host-validation compatibility issue.
 

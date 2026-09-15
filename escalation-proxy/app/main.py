@@ -76,6 +76,7 @@ from output_validation import (
 )
 from output_validation import normalize_status_value as _output_normalize_status_value
 from output_validation import parse_finalized_findings as _output_parse_finalized_findings
+from output_validation import finalized_report_format as _output_finalized_report_format
 from output_validation import redact_sensitive_text as _output_redact_sensitive_text
 from output_validation import select_best_summary_text as _output_select_best_summary_text
 from output_validation import summary_candidate_score as _output_summary_candidate_score
@@ -447,8 +448,12 @@ def _is_finalized_summary(best_score: int, selected_text: str) -> bool:
 
 
 def _parse_finalized_findings(report: str) -> dict[str, Any] | None:
-    """Parse the liaison's final Markdown report into the public allowlisted schema."""
+    """Parse the liaison's final report into the public allowlisted schema."""
     return _output_parse_finalized_findings(report, finalization_token=FINALIZATION_TOKEN)
+
+
+def _finalized_report_format(report: str) -> str:
+    return _output_finalized_report_format(report, finalization_token=FINALIZATION_TOKEN)
 
 
 def _build_investigation_service(
@@ -479,6 +484,7 @@ def _build_investigation_service(
         select_best_summary_text=_select_best_summary_text,
         is_finalized_summary=_is_finalized_summary,
         parse_finalized_findings=_parse_finalized_findings,
+        finalized_report_format=_finalized_report_format,
         redact_sensitive_text=redact_sensitive_text,
         event_sink=log_event,
         sleep=asyncio.sleep,

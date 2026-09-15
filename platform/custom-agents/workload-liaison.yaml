@@ -5,7 +5,8 @@ spec:
   display_name: Workload Escalation Liaison
   handoff_description: |
     Invoke this agent when an investigation thread was created by the escalation proxy
-    (identifiable by the "[ESCALATION from workload team" prefix in the message).
+    (identifiable by the `[ESCALATION from workload team]` prefix and `ROUTING_CONTRACT`
+    in the message).
     This agent investigates platform-layer issues reported by authorized callers using
     the resources and topology configured by the platform owner.
   system_prompt: |

@@ -24,6 +24,8 @@ param (
     [switch] $BootstrapEntraApplication,
     [string] $CallerPoliciesJson = '',
     [string] $AppConfigurationName = '',
+    [ValidateSet('Developer', 'Standard', 'Premium')]
+    [string] $AppConfigurationSku = 'Standard',
     [string] $CallerPolicyKey = 'escalation/caller-policies',
     [string] $CallerPolicyLabel = 'production',
     [ValidateRange(1, 3600)] [int] $CallerPolicyRefreshSeconds = 30,
@@ -268,7 +270,7 @@ if ($LASTEXITCODE -ne 0) {
         --resource-group $ResourceGroup `
         --subscription $SubscriptionId `
         --location $Location `
-        --sku Free `
+        --sku $AppConfigurationSku `
         --disable-local-auth true `
         --output none
     if ($LASTEXITCODE -ne 0) { throw "Failed to create App Configuration store '$AppConfigurationName'." }
@@ -285,6 +287,12 @@ $appConfigurationEndpoint = az appconfig show `
     --resource-group $ResourceGroup `
     --subscription $SubscriptionId `
     --query endpoint `
+    --output tsv
+$appConfigurationPublicNetworkAccess = az appconfig show `
+    --name $AppConfigurationName `
+    --resource-group $ResourceGroup `
+    --subscription $SubscriptionId `
+    --query publicNetworkAccess `
     --output tsv
 az resource update `
     --ids $appConfigurationId `
@@ -326,7 +334,10 @@ if ($dataOwnerAssignmentCount -eq 0) {
     if ($LASTEXITCODE -ne 0) { throw 'Failed to grant App Configuration Data Owner to the signed-in operator.' }
 }
 
-$policySeeded = $false
+$policySeeded = $appConfigurationPublicNetworkAccess -eq 'Disabled'
+if ($policySeeded) {
+    Write-Host 'Preserving existing private App Configuration policy; public data-plane seeding is skipped.' -ForegroundColor Green
+}
 $policySeedDeadline = [DateTimeOffset]::UtcNow.AddSeconds($AppConfigurationRbacTimeoutSeconds)
 $attempt = 0
 while (-not $policySeeded) {
@@ -373,6 +384,7 @@ $deployOutputJson = az deployment group create `
         entraAppClientId=$ProxyEntraAppId `
         callerPoliciesJson=$callerPoliciesParameterValue `
         appConfigurationName=$AppConfigurationName `
+        appConfigurationSku=$AppConfigurationSku `
         callerPolicyKey=$CallerPolicyKey `
         callerPolicyLabel=$CallerPolicyLabel `
         callerPolicyRefreshSeconds=$CallerPolicyRefreshSeconds `

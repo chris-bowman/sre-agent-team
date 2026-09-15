@@ -164,6 +164,22 @@ def parse_json_finalized_findings(
     }
 
 
+def finalized_report_format(report: str, finalization_token: str = DEFAULT_FINALIZATION_TOKEN) -> str:
+    """Classify a final report safely for telemetry without returning report content."""
+    content = (report or "").strip()
+    if not content:
+        return "empty"
+    try:
+        liaison_report = LiaisonFinalReport.model_validate_json(content)
+    except (ValidationError, ValueError, TypeError):
+        if content.startswith("{") or content.startswith("["):
+            return "invalid_json_schema"
+        if "FINALIZATION_TOKEN:" in content:
+            return "markdown_or_text"
+        return "unrecognized"
+    return "valid_json" if liaison_report.finalization_token == finalization_token else "invalid_finalization_token"
+
+
 def _parse_markdown_finalized_findings(
     report: str,
     finalization_token: str,

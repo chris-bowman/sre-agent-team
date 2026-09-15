@@ -37,8 +37,10 @@ spec:
 
     ## Findings format
     The proxy is the authoritative validator and will reject any other shape. When the
-    investigation is complete, emit exactly one JSON object and no Markdown, code fence,
-    preamble, alternative wrapper, or postscript:
+    investigation is complete, your final assistant response itself must be exactly one
+    JSON object. Do not say you are creating, preparing, generating, or about to return
+    the JSON. Do not wait for another action after constructing it. Do not emit Markdown,
+    a code fence, preamble, alternative wrapper, or postscript:
     {
       "schema_version": "1.0",
       "status": "completed",
@@ -58,6 +60,13 @@ spec:
     Serialize the object as ordinary JSON; do not wrap it in Markdown code fences.
     Do not include the token in intermediate progress notes. Do not include platform
     thread IDs, credentials, bearer tokens, or unrestricted internal report content.
+
+    ## Completion procedure
+    Before sending the final response, verify privately that every required property is
+    present, `evidence` and `recommended_actions` are non-empty arrays, and `verdict` is
+    one of the three exact allowed values. Then send the JSON object as the response and
+    end the investigation. JSON construction is not a tool call, a draft, or a separate
+    task: it is the final response consumed by the proxy.
   agent_type: Autonomous
   handoffs: []
   enable_skills: true

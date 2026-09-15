@@ -38,35 +38,39 @@ spec:
     ## Findings format
     The proxy is the authoritative validator and will reject any other shape. When the
     investigation is complete, your final assistant response itself must be exactly one
-    JSON object. Do not say you are creating, preparing, generating, or about to return
-    the JSON. Do not wait for another action after constructing it. Do not emit Markdown,
-    a code fence, preamble, alternative wrapper, or postscript:
-    {
-      "schema_version": "1.0",
-      "status": "completed",
-      "verdict": "PLATFORM_ISSUE | APPLICATION_ISSUE | INCONCLUSIVE",
-      "root_cause": "clear conclusion",
-      "evidence": ["verified evidence"],
-      "recommended_actions": ["concrete next step"],
-      "limitations": ["visibility limitation, if any"],
-      "finalization_token": "ESCALATION_FINAL_V1"
-    }
+    Markdown report using this shape. Do not say you are creating, preparing, generating,
+    or about to return the report. Do not wait for another action after constructing it:
+
+    ## Platform Investigation Findings
+
+    ### Root Cause
+    <clear conclusion>
+
+    ### Evidence
+    - <verified evidence>
+
+    ### Recommended Actions
+    1. <concrete next step>
+
+    ### Verdict
+    PLATFORM ISSUE | APPLICATION ISSUE | INCONCLUSIVE
+
+    FINALIZATION_TOKEN: ESCALATION_FINAL_V1
 
     ## Finalization contract (required)
-    The JSON property names and values above are a contract, not examples. The `verdict`
-    value must be exactly `PLATFORM_ISSUE`, `APPLICATION_ISSUE`, or `INCONCLUSIVE`.
-    `evidence`, `recommended_actions`, and `limitations` are arrays of strings. The
-    `finalization_token` must be exact and must be the final value in the JSON object.
-    Serialize the object as ordinary JSON; do not wrap it in Markdown code fences.
-    Do not include the token in intermediate progress notes. Do not include platform
-    thread IDs, credentials, bearer tokens, or unrestricted internal report content.
+    The headings and verdict values above are a contract, not examples. The Verdict body
+    must be exactly `PLATFORM ISSUE`, `APPLICATION ISSUE`, or `INCONCLUSIVE`. Root Cause,
+    Evidence, Recommended Actions, and Verdict must all contain content. Include the exact
+    `FINALIZATION_TOKEN: ESCALATION_FINAL_V1` line at the end of the report, with no text
+    after it. Do not include the token in intermediate progress notes. Do not include
+    platform thread IDs, credentials, bearer tokens, or unrestricted internal report content.
 
     ## Completion procedure
-    Before sending the final response, verify privately that every required property is
-    present, `evidence` and `recommended_actions` are non-empty arrays, and `verdict` is
-    one of the three exact allowed values. Then send the JSON object as the response and
-    end the investigation. JSON construction is not a tool call, a draft, or a separate
-    task: it is the final response consumed by the proxy.
+    Before sending the final response, verify privately that each required heading is
+    present, Evidence and Recommended Actions are non-empty, the Verdict uses one of the
+    three exact allowed values, and the finalization token is the final line. Then send
+    the Markdown report as the response and end the investigation. Report construction is
+    not a tool call, a draft, or a separate task: it is the final response consumed by the proxy.
   agent_type: Autonomous
   handoffs: []
   enable_skills: true

@@ -93,6 +93,12 @@ param containerEnvironmentSubnetPrefix string = '10.42.0.0/27'
 @description('Private endpoint subnet prefix for the registry Storage account.')
 param storagePrivateEndpointSubnetPrefix string = '10.42.1.0/28'
 
+@description('Azure Bastion subnet prefix for private operator access. Must be named AzureBastionSubnet.')
+param bastionSubnetPrefix string = '10.42.2.0/26'
+
+@description('Dedicated private subnet for temporary operator and validation hosts.')
+param operatorManagementSubnetPrefix string = '10.42.2.64/28'
+
 @description('Comma-separated MCP Host header allowlist. The deployment script replaces the initial local-safe value with the emitted Container App FQDN.')
 param mcpAllowedHosts string = '127.0.0.1:*,localhost:*,testserver,testserver:*'
 
@@ -127,6 +133,21 @@ param finalFindingsMetadataRetentionDays int = 7
 @maxValue(86400)
 @description('Seconds between bounded investigation registry expiry cleanup sweeps in each proxy replica.')
 param expiryCleanupIntervalSeconds int = 300
+
+@minValue(5)
+@maxValue(86400)
+@description('Seconds between bounded background checks for completed platform investigations when callers stop polling.')
+param reconciliationIntervalSeconds int = 60
+
+@minValue(1)
+@maxValue(100)
+@description('Maximum active investigations one proxy replica reconciles in one background sweep.')
+param maxReconciliationsPerSweep int = 10
+
+@minValue(1)
+@maxValue(86400)
+@description('Seconds one replica holds a conditional reconciliation lease for an active investigation.')
+param reconciliationLeaseSeconds int = 55
 
 @minValue(1)
 @description('Maximum synchronous Azure SDK calls offloaded concurrently per proxy replica.')
@@ -247,6 +268,18 @@ resource privateNetwork 'Microsoft.Network/virtualNetworks@2023-11-01' = if (ena
         properties: {
           addressPrefix: storagePrivateEndpointSubnetPrefix
           privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+      {
+        name: 'AzureBastionSubnet'
+        properties: {
+          addressPrefix: bastionSubnetPrefix
+        }
+      }
+      {
+        name: 'operator-management'
+        properties: {
+          addressPrefix: operatorManagementSubnetPrefix
         }
       }
     ]
@@ -507,6 +540,9 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ACTIVE_METADATA_RETENTION_SECONDS', value: string(activeMetadataRetentionDays * 86400) }
             { name: 'FINAL_FINDINGS_METADATA_RETENTION_SECONDS', value: string(finalFindingsMetadataRetentionDays * 86400) }
             { name: 'EXPIRY_CLEANUP_INTERVAL_SECONDS', value: string(expiryCleanupIntervalSeconds) }
+            { name: 'RECONCILIATION_INTERVAL_SECONDS', value: string(reconciliationIntervalSeconds) }
+            { name: 'MAX_RECONCILIATIONS_PER_SWEEP', value: string(maxReconciliationsPerSweep) }
+            { name: 'RECONCILIATION_LEASE_SECONDS', value: string(reconciliationLeaseSeconds) }
             { name: 'MAX_CONCURRENT_BLOCKING_SDK_CALLS', value: string(maxConcurrentBlockingSdkCalls) }
             { name: 'MAX_CONCURRENT_PLATFORM_REQUESTS', value: string(maxConcurrentPlatformRequests) }
             { name: 'PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS', value: platformRequestQueueTimeoutSeconds }

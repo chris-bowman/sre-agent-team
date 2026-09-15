@@ -153,6 +153,9 @@ READINESS_DEPENDENCY_TIMEOUT_SECONDS = max(
     0.1,
 )
 EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTERVAL_SECONDS", "300")), 1.0)
+RECONCILIATION_INTERVAL_SECONDS = max(float(os.environ.get("RECONCILIATION_INTERVAL_SECONDS", "60")), 5.0)
+MAX_RECONCILIATIONS_PER_SWEEP = max(int(os.environ.get("MAX_RECONCILIATIONS_PER_SWEEP", "10")), 1)
+RECONCILIATION_LEASE_SECONDS = max(float(os.environ.get("RECONCILIATION_LEASE_SECONDS", "55")), 1.0)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
 # recheck the platform thread internally, so the calling agent rarely needs a
@@ -181,6 +184,7 @@ _blocking_sdk_semaphore = asyncio.Semaphore(MAX_CONCURRENT_BLOCKING_SDK_CALLS)
 _platform_request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PLATFORM_REQUESTS)
 _readiness_lock = asyncio.Lock()
 _readiness_cache: tuple[float, str | None] = (0.0, None)
+_reconciliation_owner = str(uuid.uuid4())
 
 
 async def _run_blocking_sdk_call(function, *args, **kwargs):
@@ -653,16 +657,61 @@ async def _run_expiry_cleanup() -> None:
         await asyncio.sleep(EXPIRY_CLEANUP_INTERVAL_SECONDS)
 
 
+async def _run_terminal_reconciliation() -> None:
+    """Release caller quota for platform threads that finish after callers stop polling."""
+    while True:
+        try:
+            records = await _run_blocking_sdk_call(
+                _investigation_registry.claim_reconcilable_investigations,
+                MAX_RECONCILIATIONS_PER_SWEEP,
+                _reconciliation_owner,
+                RECONCILIATION_LEASE_SECONDS,
+            )
+            for record in records:
+                try:
+                    status = await _fetch_investigation_status_once(record)
+                    if status in {"completed", "failed"}:
+                        await _run_blocking_sdk_call(
+                            _investigation_registry.complete_investigation,
+                            record.investigation_id,
+                            record.caller_appid,
+                            status,
+                        )
+                        log_event(
+                            "investigation_reconciled",
+                            investigation_id=record.investigation_id,
+                            outcome=status,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log_event(
+                        "investigation_reconciliation_failed",
+                        investigation_id=record.investigation_id,
+                        error_type=type(exc).__name__,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Investigation terminal reconciliation failed")
+            log_event("investigation_reconciliation_sweep_failed", error_type=type(exc).__name__)
+        await asyncio.sleep(RECONCILIATION_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def mcp_lifespan(_application):
     cleanup_task = asyncio.create_task(_run_expiry_cleanup())
+    reconciliation_task = asyncio.create_task(_run_terminal_reconciliation())
     try:
         async with mcp_transport.server.session_manager.run():
             yield
     finally:
         cleanup_task.cancel()
+        reconciliation_task.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup_task
+        with suppress(asyncio.CancelledError):
+            await reconciliation_task
 
 
 app.router.lifespan_context = mcp_lifespan

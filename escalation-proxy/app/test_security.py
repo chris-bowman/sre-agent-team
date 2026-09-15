@@ -61,6 +61,7 @@ from main import (
     _platform_request,
     _run_blocking_sdk_call,
     _run_expiry_cleanup,
+    _run_terminal_reconciliation,
     app,
     log_event,
     mcp_lifespan,
@@ -2331,6 +2332,48 @@ def test_registry_cleanup_respects_batch_limit(registry):
 
     assert registry.cleanup_expired(limit=1) == 1
     assert len(registry._registry) == 1
+
+
+def test_registry_reconciliation_claims_active_thread_once(registry):
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+
+    first_claim = registry.claim_reconcilable_investigations(1, "replica-one", 60)
+    second_claim = registry.claim_reconcilable_investigations(1, "replica-two", 60)
+
+    assert [record.investigation_id for record in first_claim] == [investigation_id]
+    assert second_claim == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_reconciler_releases_completed_investigation(registry):
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._fetch_investigation_status_once", AsyncMock(return_value="completed")),
+        patch("main.asyncio.sleep", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+        patch("main.log_event") as event,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await _run_terminal_reconciliation()
+
+    record = registry.get_investigation(investigation_id, "oid1", "appid1")
+    assert record.reservation_state == "completed"
+    event.assert_any_call("investigation_reconciled", investigation_id=investigation_id, outcome="completed")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

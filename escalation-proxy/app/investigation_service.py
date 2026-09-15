@@ -81,6 +81,13 @@ class InvestigationRegistry(Protocol):
         redaction_applied: bool,
     ) -> None: ...
 
+    def claim_reconcilable_investigations(
+        self,
+        limit: int,
+        lease_owner: str,
+        lease_seconds: float,
+    ) -> list[InvestigationRecord]: ...
+
 
 class PlatformResponse(Protocol):
     status_code: int

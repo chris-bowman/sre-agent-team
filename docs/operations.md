@@ -16,6 +16,8 @@ Production Table Storage uses the `privatelink.table.core.windows.net` private z
 
 Production dynamic caller policy uses an App Configuration Standard or Premium store with a `privatelink.azconfig.io` private endpoint and private DNS link in the same VNet. The Free tier does not support private endpoints and is not suitable for the private production profile. Public App Configuration access is disabled in the private profile; the proxy uses bounded SDK timeouts, and the static-policy path is recovery-only.
 
+The private profile also reserves `AzureBastionSubnet` and `operator-management` subnets. They support a temporary private operator runner for policy administration and validation when public App Configuration access is disabled; the runner has no public IP and is not part of the proxy runtime path.
+
 Validate DNS from the running revision whenever network policy changes. Readiness proves Table access; caller-policy and Platform SRE Agent dependencies are reported through structured events and request outcomes.
 
 ## Investigation registry metadata
@@ -43,6 +45,14 @@ configured registry abstraction, so the same lifecycle applies to Table Storage,
 and future backends. `expires_at` does not cause Azure Table Storage to delete an entity by itself.
 With multiple replicas, concurrent sweeps are safe: a replica treats an entity already deleted by
 another replica as complete and only releases quota after its own successful deletion.
+
+Separately, each replica runs a bounded terminal reconciler every `ReconciliationIntervalSeconds`
+(default 60 seconds). It conditionally leases at most `MaxReconciliationsPerSweep` active platform
+threads, checks only their terminal status, and atomically marks confirmed `completed` or `failed`
+investigations terminal so their caller quota is released even when the caller stops polling. The
+lease expires after `ReconciliationLeaseSeconds` (default 55 seconds), allowing another replica to
+recover abandoned work without duplicate platform polling. The reconciler never releases uncertain
+reservations or returns report bodies; summary validation remains caller-driven.
 
 Changing registry retention affects newly admitted or newly terminal investigations. Existing
 rows keep their persisted `expires_at` value. Retention settings must satisfy organizational

@@ -63,6 +63,8 @@ class InvestigationRecord:
     findings_schema_valid: bool = False
     findings_selection_strategy: str = ""
     findings_redacted: bool = False
+    reconciliation_lease_owner: str = ""
+    reconciliation_lease_expires_at: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -318,6 +320,31 @@ class InvestigationRegistry:
             del self._registry[id]
         return len(expired)
 
+    def claim_reconcilable_investigations(
+        self,
+        limit: int,
+        lease_owner: str,
+        lease_seconds: float,
+    ) -> list[InvestigationRecord]:
+        """Claim a bounded batch of active platform threads for background reconciliation."""
+        now = time.time()
+        with self._lock:
+            claimed: list[InvestigationRecord] = []
+            for record in self._registry.values():
+                if len(claimed) >= limit:
+                    break
+                if (
+                    record.reservation_state != "active"
+                    or not record.platform_thread_id
+                    or record.expires_at < now
+                    or record.reconciliation_lease_expires_at > now
+                ):
+                    continue
+                record.reconciliation_lease_owner = lease_owner
+                record.reconciliation_lease_expires_at = now + lease_seconds
+                claimed.append(record)
+            return claimed
+
     def health_check(self) -> None:
         """Memory backend is ready when the process is serving."""
 
@@ -475,6 +502,8 @@ class TableStorageInvestigationRegistry:
             "findings_schema_valid": record.findings_schema_valid,
             "findings_selection_strategy": record.findings_selection_strategy,
             "findings_redacted": record.findings_redacted,
+            "reconciliation_lease_owner": record.reconciliation_lease_owner,
+            "reconciliation_lease_expires_at": record.reconciliation_lease_expires_at,
         }
 
     @staticmethod
@@ -508,6 +537,8 @@ class TableStorageInvestigationRegistry:
             findings_schema_valid=bool(entity.get("findings_schema_valid", False)),
             findings_selection_strategy=entity.get("findings_selection_strategy", ""),
             findings_redacted=bool(entity.get("findings_redacted", False)),
+            reconciliation_lease_owner=entity.get("reconciliation_lease_owner", ""),
+            reconciliation_lease_expires_at=float(entity.get("reconciliation_lease_expires_at", 0.0)),
         )
 
     def reserve_investigation(
@@ -937,6 +968,42 @@ class TableStorageInvestigationRegistry:
         )
         if active_count >= quota:
             raise ValueError(f"Caller has reached maximum concurrent investigations ({quota})")
+
+    def claim_reconcilable_investigations(
+        self,
+        limit: int,
+        lease_owner: str,
+        lease_seconds: float,
+    ) -> list[InvestigationRecord]:
+        """Conditionally lease active records so only one replica reconciles each thread."""
+        now = time.time()
+        claimed: list[InvestigationRecord] = []
+        entities = self._table.query_entities(query_filter="reservation_state eq 'active'")
+        for entity in islice(entities, limit):
+            if len(claimed) >= limit:
+                break
+            record = self._from_entity(entity)
+            if not record.platform_thread_id or record.expires_at < now or record.reconciliation_lease_expires_at > now:
+                continue
+            updated = dict(entity)
+            updated["reconciliation_lease_owner"] = lease_owner
+            updated["reconciliation_lease_expires_at"] = now + lease_seconds
+            try:
+                self._table.update_entity(
+                    updated,
+                    mode=UpdateMode.REPLACE,
+                    etag=self._entity_etag(entity),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
+                telemetry.log_event("table_investigation_conflict", operation="reconciliation_claim")
+                continue
+            record.reconciliation_lease_owner = lease_owner
+            record.reconciliation_lease_expires_at = now + lease_seconds
+            claimed.append(record)
+        return claimed
 
     def cleanup_expired(self, limit: int = MAX_EXPIRY_CLEANUP_BATCH_SIZE) -> int:
         now = time.time()

@@ -55,6 +55,7 @@ from main import (
     TableStorageInvestigationRegistry,
     _bounded_platform_request,
     _create_investigation_impl,
+    _fetch_investigation_status_once,
     _get_status_impl,
     _get_summary_impl,
     _platform_request,
@@ -941,6 +942,41 @@ async def test_terminal_status_releases_quota_slot(registry):
         severity="high",
         maximum_investigations=1,
     )
+
+
+@pytest.mark.asyncio
+async def test_status_accepts_finalized_json_when_platform_thread_stays_running(registry):
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="consumer",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+    record = registry.get_investigation(investigation_id, "oid1", "appid1")
+    finalized_report = json.dumps(
+        {
+            "schema_version": "1.0",
+            "status": "completed",
+            "verdict": "INCONCLUSIVE",
+            "root_cause": "No platform issue was proven.",
+            "evidence": ["Dependency health was normal."],
+            "recommended_actions": ["Continue workload investigation."],
+            "limitations": [],
+            "finalization_token": "ESCALATION_FINAL_V1",
+        }
+    )
+    thread_response = MagicMock(status_code=200)
+    thread_response.json.return_value = {"status": "running"}
+    messages_response = MagicMock(status_code=200)
+    messages_response.json.return_value = {"value": [{"author": {"role": "SREAgent"}, "text": finalized_report}]}
+
+    with (
+        patch("main._platform_request", new_callable=AsyncMock, side_effect=[thread_response, messages_response]),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+    ):
+        assert await _fetch_investigation_status_once(record) == "completed"
 
 
 @pytest.mark.asyncio

@@ -391,20 +391,14 @@ class InvestigationService:
         ]
 
         if any(
-            status in ("completed", "succeeded", "resolved", "done", "finished") for status in normalized_candidates
-        ):
-            status = "completed"
-        elif any(
             status in ("failed", "error", "cancelled", "canceled", "timeout", "timedout")
             for status in normalized_candidates
         ):
             status = "failed"
         elif any(
-            status in ("running", "inprogress", "processing", "active", "executing") for status in normalized_candidates
+            status in ("completed", "succeeded", "resolved", "done", "finished") for status in normalized_candidates
         ):
-            status = "running"
-        elif any(status in ("pending", "queued", "created", "notstarted", "new") for status in normalized_candidates):
-            status = "pending"
+            status = "completed"
         else:
             try:
                 messages_response = await self._platform_request(
@@ -420,6 +414,15 @@ class InvestigationService:
                 best_score, selected_text, _selection_strategy = self._select_best_summary_text(agent_texts)
                 if self._is_finalized_summary(best_score, selected_text):
                     status = "completed"
+                elif any(
+                    value in ("running", "inprogress", "processing", "active", "executing")
+                    for value in normalized_candidates
+                ):
+                    status = "running"
+                elif any(
+                    value in ("pending", "queued", "created", "notstarted", "new") for value in normalized_candidates
+                ):
+                    status = "pending"
                 elif agent_texts or data.get("lastMessage"):
                     status = "running"
                 else:

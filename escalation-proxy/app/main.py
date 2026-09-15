@@ -71,12 +71,12 @@ from investigation_registry import (
     TableStorageInvestigationRegistry as TableStorageInvestigationRegistry,
 )
 from investigation_service import InvestigationService, InvestigationServiceConfig
+from output_validation import finalized_report_format as _output_finalized_report_format
 from output_validation import (
     is_finalized_summary as _output_is_finalized_summary,
 )
 from output_validation import normalize_status_value as _output_normalize_status_value
 from output_validation import parse_finalized_findings as _output_parse_finalized_findings
-from output_validation import finalized_report_format as _output_finalized_report_format
 from output_validation import redact_sensitive_text as _output_redact_sensitive_text
 from output_validation import select_best_summary_text as _output_select_best_summary_text
 from output_validation import summary_candidate_score as _output_summary_candidate_score

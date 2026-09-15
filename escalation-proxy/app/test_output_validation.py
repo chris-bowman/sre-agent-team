@@ -2,10 +2,10 @@ import json
 from unittest.mock import MagicMock
 
 from output_validation import (
+    finalized_report_format,
     is_finalized_summary,
     normalize_status_value,
     parse_finalized_findings,
-    finalized_report_format,
     parse_json_finalized_findings,
     redact_sensitive_text,
     select_best_summary_text,
@@ -205,5 +205,10 @@ def test_json_finalized_findings_rejects_extra_fields_and_wrong_token():
 
 def test_finalized_report_format_classifies_without_returning_report_content():
     assert finalized_report_format("", finalization_token="CUSTOM_FINAL") == "empty"
-    assert finalized_report_format("FINALIZATION_TOKEN: CUSTOM_FINAL", finalization_token="CUSTOM_FINAL") == "markdown_or_text"
-    assert finalized_report_format('{"schema_version":"1.0"}', finalization_token="CUSTOM_FINAL") == "invalid_json_schema"
+    assert (
+        finalized_report_format("FINALIZATION_TOKEN: CUSTOM_FINAL", finalization_token="CUSTOM_FINAL")
+        == "markdown_or_text"
+    )
+    assert (
+        finalized_report_format('{"schema_version":"1.0"}', finalization_token="CUSTOM_FINAL") == "invalid_json_schema"
+    )

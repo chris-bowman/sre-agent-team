@@ -543,19 +543,19 @@ The proxy provides the following semantic contract for workload-to-platform requ
 
 Request fields:
 
-- workload_name
-- workload_scope
 - description
+- caller_label or the deprecated `workload_name` alias (never both with different values)
+- resource_group_id
 - severity
 - context
-- source_identity
-- optional metadata
+- idempotency_key
 
 Response fields:
 
+- schema_version
 - investigation_id
 - status
-- created_at
+- correlation_id
 - message
 
 #### get_investigation_status
@@ -563,13 +563,15 @@ Response fields:
 Request fields:
 
 - investigation_id
+- wait_seconds (optional bounded long-poll)
 
 Response fields:
 
+- schema_version
 - investigation_id
 - status
-- updated_at
-- progress_summary
+- correlation_id
+- poll_after_seconds
 
 #### get_investigation_summary
 
@@ -579,11 +581,17 @@ Request fields:
 
 Response fields:
 
+- schema_version
 - investigation_id
 - status
 - summary
-- schema_version
-- completed_at
+- findings (caller-safe JSON: summary, impact, evidence, likely_causes, recommended_actions, limitations)
+
+The platform liaison produces a strict finalized Markdown report in the private
+platform thread. The proxy validates its required headings, allowed verdict, and
+terminal `FINALIZATION_TOKEN: ESCALATION_FINAL_V1`, then returns only the
+caller-safe JSON response above. Callers never receive platform thread IDs or raw
+platform evidence. See `docs/service-contract-v1.md` for the normative schema.
 
 ### 12.2 Operational metadata requirements
 

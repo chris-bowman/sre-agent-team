@@ -59,6 +59,7 @@ from main import (
     _get_status_impl,
     _get_summary_impl,
     _platform_request,
+    _probe_readiness_dependency,
     _run_blocking_sdk_call,
     _run_expiry_cleanup,
     _run_terminal_reconciliation,
@@ -1481,6 +1482,77 @@ def test_table_reservation_submits_counter_and_reservation_transaction():
     assert operations[2][1]["request_fingerprint"] == "fingerprint-1"
 
 
+def test_table_reservation_concurrent_quota_one_admits_only_one_writer():
+    class FakeTable:
+        def __init__(self):
+            self.counter = {
+                "PartitionKey": "appid1",
+                "RowKey": "__quota_counter__",
+                "active_count": 0,
+                "etag": "etag-1",
+            }
+            self.rows = []
+            self.lock = threading.Lock()
+            self.initial_reads = threading.Barrier(2)
+            self.counter_reads = 0
+
+        def query_entities(self, query_filter):
+            if query_filter.startswith("expires_at"):
+                return []
+            return [dict(row) for row in self.rows]
+
+        def get_entity(self, partition_key, row_key):
+            assert partition_key == "appid1"
+            assert row_key == "__quota_counter__"
+            with self.lock:
+                self.counter_reads += 1
+                initial_read = self.counter_reads <= 2
+                counter = dict(self.counter)
+            if initial_read:
+                self.initial_reads.wait(timeout=1)
+            return counter
+
+        def update_entity(self, entity, **kwargs):
+            with self.lock:
+                assert kwargs["etag"] == self.counter["etag"]
+                self.counter = dict(entity)
+                self.counter["etag"] = "etag-reconciled"
+
+        def submit_transaction(self, operations):
+            with self.lock:
+                counter_update = operations[0][1]
+                expected_etag = operations[0][2]["etag"]
+                if expected_etag != self.counter["etag"]:
+                    error = TableTransactionError(message="counter changed")
+                    error.response = MagicMock(status_code=412)
+                    raise error
+                self.counter = dict(counter_update)
+                self.counter["etag"] = "etag-2"
+                self.rows.append(dict(operations[1][1]))
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+
+    def reserve() -> object:
+        return registry.reserve_investigation(
+            caller_oid="oid1",
+            caller_appid="appid1",
+            workload_name="consumer",
+            workload_identity_appid="appid1",
+            severity="high",
+            maximum_investigations=1,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(reserve) for _ in range(2)]
+    results = [future.result() if future.exception() is None else future.exception() for future in futures]
+
+    assert len([result for result in results if not isinstance(result, Exception)]) == 1
+    assert sum(isinstance(result, ValueError) for result in results) == 1
+    assert registry._table.counter["active_count"] == 1
+    assert len(registry._table.rows) == 1
+
+
 def test_table_completion_atomically_releases_quota_slot():
     class FakeTable:
         def __init__(self):
@@ -1951,6 +2023,28 @@ def test_readiness_checks_are_cached_and_coalesced():
 
     assert first.status_code == 200
     assert second.status_code == 200
+    policy_check.assert_called_once()
+    registry_check.assert_called_once()
+    token_check.assert_called_once()
+    circuit_check.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_readiness_burst_coalesces_blocking_dependency_checks():
+    def slow_success() -> None:
+        time.sleep(0.02)
+
+    with (
+        patch("main.READINESS_CACHE_SECONDS", 5),
+        patch("main._readiness_cache", (0.0, None)),
+        patch("main._caller_policy_store.health_check", side_effect=slow_success) as policy_check,
+        patch("main._investigation_registry.health_check", side_effect=slow_success) as registry_check,
+        patch("main.get_platform_agent_token", side_effect=lambda: "token") as token_check,
+        patch("main._platform_circuit_breaker.is_available", return_value=True) as circuit_check,
+    ):
+        results = await asyncio.gather(*(_probe_readiness_dependency() for _ in range(20)))
+
+    assert results == [None] * 20
     policy_check.assert_called_once()
     registry_check.assert_called_once()
     token_check.assert_called_once()

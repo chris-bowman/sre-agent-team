@@ -1686,6 +1686,50 @@ def test_table_releases_stale_uncertain_reservation_with_conditional_transaction
     assert registry._table.operations[1][2]["etag"] == "reservation-etag"
 
 
+def test_table_uncertain_reservation_cleanup_does_not_release_after_concurrent_finalize():
+    class FakeTable:
+        def __init__(self):
+            self.counter = {
+                "PartitionKey": "appid1",
+                "RowKey": "__quota_counter__",
+                "active_count": 1,
+                "etag": "counter-etag",
+            }
+            self.reservation = {
+                "PartitionKey": "appid1",
+                "RowKey": "investigation1",
+                "caller_oid": "oid1",
+                "caller_appid": "appid1",
+                "workload_name": "workload-a",
+                "workload_identity_appid": "appid1",
+                "platform_thread_id": "",
+                "severity": "high",
+                "created_at": time.time() - 61,
+                "expires_at": time.time() + 300,
+                "reservation_state": "reserved",
+                "etag": "reservation-etag",
+            }
+
+        def query_entities(self, query_filter):
+            return [dict(self.reservation)]
+
+        def get_entity(self, partition_key, row_key):
+            return dict(self.counter)
+
+        def submit_transaction(self, operations):
+            error = TableTransactionError(message="reservation was finalized")
+            error.response = MagicMock(status_code=412)
+            raise error
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+
+    released = registry.release_stale_uncertain_reservations(limit=1, grace_seconds=60)
+
+    assert released == []
+    assert registry._table.counter["active_count"] == 1
+
+
 def test_table_findings_metadata_applies_finalized_retention():
     class FakeTable:
         def __init__(self):

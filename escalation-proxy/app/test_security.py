@@ -1223,6 +1223,7 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
 
     record = registry.get_investigation(result["investigation_id"], "oid1", "appid1")
     message = platform_request.await_args.kwargs["json"]["StartMessage"]["Text"]
+    assert message.startswith("/agent workload_liaison\n")
     assert f"Correlation ID: {record.request_correlation_id}" in message
     assert message.count("Correlation ID:") == 1
     assert record.platform_thread_id == "private-thread-id"

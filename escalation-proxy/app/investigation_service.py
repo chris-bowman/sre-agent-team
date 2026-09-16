@@ -328,9 +328,9 @@ class InvestigationService:
         )
 
         message = (
+            f"/agent {self._config.target_liaison_agent}\n"
             "[ESCALATION from workload team]\n"
-            f"ROUTING_CONTRACT: Immediately hand off via `/agent {self._config.target_liaison_agent}` and perform "
-            "the platform investigation through that sub-agent. The liaison is the only report producer.\n\n"
+            "The selected liaison is the only report producer.\n\n"
             "COMPLETION_CONTRACT: The liaison must return exactly one Markdown report with the headings `### Root Cause`, "
             "`### Evidence`, `### Recommended Actions`, and `### Verdict`. Each section must contain content; Verdict "
             "must be exactly `PLATFORM ISSUE`, `APPLICATION ISSUE`, or `INCONCLUSIVE`; and the final line must be "

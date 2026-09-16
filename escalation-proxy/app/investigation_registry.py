@@ -643,6 +643,28 @@ class TableStorageInvestigationRegistry:
                 telemetry.log_event("table_quota_counter_conflict", operation="reserve", attempt=_attempt + 1)
                 time.sleep((0.05 * (2**_attempt)) + random.uniform(0, 0.05))
                 continue
+            except Exception as exc:
+                try:
+                    committed_entity = self._table.get_entity(
+                        self._partition_key(workload_identity_appid), record.investigation_id
+                    )
+                    committed_record = self._from_entity(committed_entity)
+                except ResourceNotFoundError:
+                    raise exc
+                if (
+                    committed_record.caller_appid == caller_appid
+                    and committed_record.workload_identity_appid == workload_identity_appid
+                    and committed_record.idempotency_key == idempotency_key
+                    and committed_record.request_fingerprint == request_fingerprint
+                    and committed_record.reservation_state == "reserved"
+                ):
+                    telemetry.log_event(
+                        "table_reservation_recovered",
+                        investigation_id=record.investigation_id,
+                        outcome="committed_after_unknown_response",
+                    )
+                    return ReservationResult(record.investigation_id, created=True)
+                raise exc
         raise ValueError("Quota reservation conflicted; please retry")
 
     def finalize_reservation(self, investigation_id: str, caller_appid: str, platform_thread_id: str) -> None:

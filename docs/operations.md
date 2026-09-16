@@ -54,6 +54,11 @@ lease expires after `ReconciliationLeaseSeconds` (default 55 seconds), allowing 
 recover abandoned work without duplicate platform polling. The reconciler never releases uncertain
 reservations or returns report bodies; summary validation remains caller-driven.
 
+Table admission treats a response timeout after transaction submission as an uncertain outcome. The
+proxy reads back only the generated caller-partition reservation and proceeds only when its caller,
+idempotency fingerprint, and `reserved` state exactly match. It otherwise returns the original
+failure without issuing a platform create request or assuming the quota slot was committed.
+
 Changing registry retention affects newly admitted or newly terminal investigations. Existing
 rows keep their persisted `expires_at` value. Retention settings must satisfy organizational
 privacy, incident-response, and audit requirements before production deployment.

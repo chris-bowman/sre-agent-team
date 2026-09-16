@@ -1553,6 +1553,54 @@ def test_table_reservation_concurrent_quota_one_admits_only_one_writer():
     assert len(registry._table.rows) == 1
 
 
+def test_table_reservation_recovers_after_timeout_following_committed_transaction():
+    class FakeTable:
+        def __init__(self):
+            self.counter = {
+                "PartitionKey": "appid1",
+                "RowKey": "__quota_counter__",
+                "active_count": 0,
+                "etag": "etag-1",
+            }
+            self.investigation = None
+
+        def query_entities(self, query_filter):
+            return []
+
+        def get_entity(self, partition_key, row_key):
+            assert partition_key == "appid1"
+            if row_key == "__quota_counter__":
+                return dict(self.counter)
+            if self.investigation is not None and row_key == self.investigation["RowKey"]:
+                return dict(self.investigation)
+            raise ResourceNotFoundError("investigation was not committed")
+
+        def submit_transaction(self, operations):
+            self.counter = dict(operations[0][1])
+            self.counter["etag"] = "etag-2"
+            self.investigation = dict(operations[1][1])
+            self.investigation["etag"] = "investigation-etag"
+            raise TimeoutError("response was lost after commit")
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+
+    reservation = registry.reserve_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="consumer",
+        workload_identity_appid="appid1",
+        severity="high",
+        maximum_investigations=1,
+        idempotency_key="timeout-after-commit",
+        request_fingerprint="fingerprint-1",
+    )
+
+    assert reservation.created
+    assert reservation.investigation_id == registry._table.investigation["RowKey"]
+    assert registry._table.counter["active_count"] == 1
+
+
 def test_table_completion_atomically_releases_quota_slot():
     class FakeTable:
         def __init__(self):

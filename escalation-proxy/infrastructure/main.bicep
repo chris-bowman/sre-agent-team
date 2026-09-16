@@ -33,6 +33,9 @@ param tenantId string = tenant().tenantId
 @description('Entra app registration client ID for the proxy (created before deployment).')
 param entraAppClientId string
 
+@description('Platform custom agent that produces the internal investigation report.')
+param targetLiaisonAgent string = 'workload_liaison'
+
 @secure()
 @description('Operator-managed same-tenant caller policies serialized as JSON.')
 param callerPoliciesJson string = ''
@@ -530,6 +533,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
           ]
           env: [
             { name: 'PLATFORM_AGENT_ENDPOINT', value: platformAgentEndpoint }
+            { name: 'TARGET_LIAISON_AGENT', value: targetLiaisonAgent }
             { name: 'ENTRA_TENANT_ID', value: tenantId }
             { name: 'ENTRA_CLIENT_ID', value: entraAppClientId }
             { name: 'AZURE_CLIENT_ID', value: proxyUami.properties.clientId }

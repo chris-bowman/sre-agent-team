@@ -22,6 +22,7 @@ param (
     [string] $PipIndexUrl = 'https://packagefeedproxy.microsoft.io/pypi/simple/',
     [string] $ProxyEntraAppId = '',
     [switch] $BootstrapEntraApplication,
+    [string] $TargetLiaisonAgent = 'workload_liaison',
     [string] $CallerPoliciesJson = '',
     [string] $AppConfigurationName = '',
     [ValidateSet('Developer', 'Standard', 'Premium')]
@@ -384,6 +385,7 @@ $deployOutputJson = az deployment group create `
         containerImage=$containerImage `
         platformAgentResourceId=$PlatformAgentId `
         platformAgentEndpoint=$PlatformAgentEndpoint `
+        targetLiaisonAgent=$TargetLiaisonAgent `
         tenantId=$tenantId `
         entraAppClientId=$ProxyEntraAppId `
         callerPoliciesJson=$callerPoliciesParameterValue `

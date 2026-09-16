@@ -798,6 +798,31 @@ async def test_status_lookup_for_missing_or_foreign_investigation_is_opaque_not_
 
 
 @pytest.mark.asyncio
+async def test_summary_lookup_for_missing_or_foreign_investigation_is_opaque_not_found(registry):
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="low",
+    )
+    foreign_caller = CallerIdentity({"appid": "appid2", "oid": "oid2", "roles": ["EscalationCaller"]})
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=MagicMock()),
+        patch("main._platform_request", new_callable=AsyncMock) as platform_request,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), foreign_caller)
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Investigation not found"
+    platform_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_failed_platform_creation_releases_reserved_quota_slot(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     request = CreateInvestigationRequest(

@@ -502,13 +502,9 @@ class InvestigationService:
                 raise HTTPException(status_code=409, detail="Investigation outcome could not be confirmed")
             await self._run_sync(self._registry.record_summary_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
-            if "Unauthorized" in str(exc):
-                status_code = 403
-            elif "rate limit" in str(exc) or "maximum summary polls" in str(exc):
-                status_code = 429
-            else:
-                status_code = 404
-            raise HTTPException(status_code=status_code, detail=str(exc))
+            if "rate limit" in str(exc) or "maximum summary polls" in str(exc):
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
         platform_token = await self._run_sync(self._get_platform_agent_token)
         response = await self._platform_request("GET", f"/threads/{record.platform_thread_id}/messages", platform_token)

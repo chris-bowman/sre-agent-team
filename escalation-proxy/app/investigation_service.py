@@ -468,8 +468,9 @@ class InvestigationService:
                 return {"investigation_id": req.investigation_id, "status": "failed", "progress": ""}
             await self._run_sync(self._registry.record_status_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
-            status_code = 403 if "Unauthorized" in str(exc) else 429
-            raise HTTPException(status_code=status_code, detail=str(exc))
+            if "rate limit" in str(exc) or "maximum status polls" in str(exc):
+                raise HTTPException(status_code=429, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
         wait_budget = max(0, min(req.wait_seconds, self._config.max_status_wait_seconds))
         deadline = self._monotonic() + wait_budget

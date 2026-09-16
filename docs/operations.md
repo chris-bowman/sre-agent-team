@@ -59,6 +59,12 @@ proxy reads back only the generated caller-partition reservation and proceeds on
 idempotency fingerprint, and `reserved` state exactly match. It otherwise returns the original
 failure without issuing a platform create request or assuming the quota slot was committed.
 
+If a no-thread reservation remains after `UncertainReservationGraceSeconds` (default 900 seconds),
+the reconciler marks it failed and releases its quota slot with the same conditional Table
+transaction used for terminal completion. Its idempotency record is retained through normal terminal
+metadata retention, so a repeat of the same request cannot create a duplicate platform thread. The
+caller receives a safe terminal failure and must use a new idempotency key for another attempt.
+
 Changing registry retention affects newly admitted or newly terminal investigations. Existing
 rows keep their persisted `expires_at` value. Retention settings must satisfy organizational
 privacy, incident-response, and audit requirements before production deployment.

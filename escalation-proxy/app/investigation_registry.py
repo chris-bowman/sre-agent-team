@@ -29,6 +29,10 @@ MIN_STATUS_POLL_INTERVAL_SECONDS = int(os.environ.get("MIN_STATUS_POLL_INTERVAL_
 MAX_STATUS_POLLS_PER_INVESTIGATION = 288  # generous cap; long-polling means far fewer calls in practice
 MIN_SUMMARY_POLL_INTERVAL_SECONDS = int(os.environ.get("MIN_SUMMARY_POLL_INTERVAL_SECONDS", "5"))
 MAX_SUMMARY_POLLS_PER_INVESTIGATION = int(os.environ.get("MAX_SUMMARY_POLLS_PER_INVESTIGATION", "288"))
+UNCERTAIN_RESERVATION_GRACE_SECONDS = max(
+    int(os.environ.get("UNCERTAIN_RESERVATION_GRACE_SECONDS", "900")),
+    1,
+)
 
 
 @dataclass
@@ -344,6 +348,30 @@ class InvestigationRegistry:
                 record.reconciliation_lease_expires_at = now + lease_seconds
                 claimed.append(record)
             return claimed
+
+    def release_stale_uncertain_reservations(
+        self,
+        limit: int,
+        grace_seconds: float,
+    ) -> list[InvestigationRecord]:
+        """Release quota for old no-thread reservations while retaining their idempotency record."""
+        now = time.time()
+        with self._lock:
+            released: list[InvestigationRecord] = []
+            for record in self._registry.values():
+                if len(released) >= limit:
+                    break
+                if (
+                    record.reservation_state != "reserved"
+                    or record.platform_thread_id
+                    or now - record.created_at < grace_seconds
+                ):
+                    continue
+                record.reservation_state = "failed"
+                record.completed_at = now
+                record.expires_at = max(record.expires_at, now + FINAL_FINDINGS_METADATA_RETENTION_SECONDS)
+                released.append(record)
+            return released
 
     def health_check(self) -> None:
         """Memory backend is ready when the process is serving."""
@@ -1026,6 +1054,66 @@ class TableStorageInvestigationRegistry:
             record.reconciliation_lease_expires_at = now + lease_seconds
             claimed.append(record)
         return claimed
+
+    def release_stale_uncertain_reservations(
+        self,
+        limit: int,
+        grace_seconds: float,
+    ) -> list[InvestigationRecord]:
+        """Terminalize old no-thread reservations with an ETag-protected quota release."""
+        now = time.time()
+        cutoff = now - grace_seconds
+        released: list[InvestigationRecord] = []
+        entities = self._table.query_entities(
+            query_filter=f"reservation_state eq 'reserved' and created_at lt {cutoff}"
+        )
+        for entity in islice(entities, limit):
+            record = self._from_entity(entity)
+            if record.platform_thread_id:
+                continue
+            counter = self._get_or_create_quota_counter(record.caller_appid)
+            updated_entity = dict(entity)
+            updated_entity["reservation_state"] = "failed"
+            updated_entity["completed_at"] = now
+            updated_entity["expires_at"] = max(
+                float(entity.get("expires_at", 0.0)),
+                now + FINAL_FINDINGS_METADATA_RETENTION_SECONDS,
+            )
+            updated_counter = dict(counter)
+            updated_counter["active_count"] = max(0, int(counter.get("active_count", 0)) - 1)
+            try:
+                self._table.submit_transaction(
+                    [
+                        (
+                            "update",
+                            updated_counter,
+                            {
+                                "mode": UpdateMode.REPLACE,
+                                "etag": self._entity_etag(counter),
+                                "match_condition": MatchConditions.IfNotModified,
+                            },
+                        ),
+                        (
+                            "update",
+                            updated_entity,
+                            {
+                                "mode": UpdateMode.REPLACE,
+                                "etag": self._entity_etag(entity),
+                                "match_condition": MatchConditions.IfNotModified,
+                            },
+                        ),
+                    ]
+                )
+            except (ResourceModifiedError, TableTransactionError) as exc:
+                if not self._is_concurrency_conflict(exc):
+                    raise
+                telemetry.log_event("table_investigation_conflict", operation="uncertain_reservation_release")
+                continue
+            record.reservation_state = "failed"
+            record.completed_at = now
+            record.expires_at = updated_entity["expires_at"]
+            released.append(record)
+        return released
 
     def cleanup_expired(self, limit: int = MAX_EXPIRY_CLEANUP_BATCH_SIZE) -> int:
         now = time.time()

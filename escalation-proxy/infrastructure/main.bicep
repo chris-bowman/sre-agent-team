@@ -149,6 +149,11 @@ param maxReconciliationsPerSweep int = 10
 @description('Seconds one replica holds a conditional reconciliation lease for an active investigation.')
 param reconciliationLeaseSeconds int = 55
 
+@minValue(60)
+@maxValue(86400)
+@description('Seconds to retain a no-thread reservation before terminalizing its uncertain outcome and releasing quota.')
+param uncertainReservationGraceSeconds int = 900
+
 @minValue(1)
 @description('Maximum synchronous Azure SDK calls offloaded concurrently per proxy replica.')
 param maxConcurrentBlockingSdkCalls int = 16
@@ -543,6 +548,7 @@ resource proxyApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'RECONCILIATION_INTERVAL_SECONDS', value: string(reconciliationIntervalSeconds) }
             { name: 'MAX_RECONCILIATIONS_PER_SWEEP', value: string(maxReconciliationsPerSweep) }
             { name: 'RECONCILIATION_LEASE_SECONDS', value: string(reconciliationLeaseSeconds) }
+            { name: 'UNCERTAIN_RESERVATION_GRACE_SECONDS', value: string(uncertainReservationGraceSeconds) }
             { name: 'MAX_CONCURRENT_BLOCKING_SDK_CALLS', value: string(maxConcurrentBlockingSdkCalls) }
             { name: 'MAX_CONCURRENT_PLATFORM_REQUESTS', value: string(maxConcurrentPlatformRequests) }
             { name: 'PLATFORM_REQUEST_QUEUE_TIMEOUT_SECONDS', value: platformRequestQueueTimeoutSeconds }

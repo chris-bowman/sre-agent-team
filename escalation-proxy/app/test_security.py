@@ -1637,6 +1637,55 @@ def test_table_completion_atomically_releases_quota_slot():
     )
 
 
+def test_table_releases_stale_uncertain_reservation_with_conditional_transaction():
+    class FakeTable:
+        def __init__(self):
+            self.counter = {
+                "PartitionKey": "appid1",
+                "RowKey": "__quota_counter__",
+                "active_count": 1,
+                "etag": "counter-etag",
+            }
+            self.reservation = {
+                "PartitionKey": "appid1",
+                "RowKey": "investigation1",
+                "caller_oid": "oid1",
+                "caller_appid": "appid1",
+                "workload_name": "workload-a",
+                "workload_identity_appid": "appid1",
+                "platform_thread_id": "",
+                "severity": "high",
+                "created_at": time.time() - 61,
+                "expires_at": time.time() + 300,
+                "reservation_state": "reserved",
+                "etag": "reservation-etag",
+            }
+            self.operations = None
+
+        def query_entities(self, query_filter):
+            assert "reservation_state eq 'reserved'" in query_filter
+            return [dict(self.reservation)]
+
+        def get_entity(self, partition_key, row_key):
+            assert partition_key == "appid1"
+            assert row_key == "__quota_counter__"
+            return dict(self.counter)
+
+        def submit_transaction(self, operations):
+            self.operations = operations
+
+    registry = TableStorageInvestigationRegistry.__new__(TableStorageInvestigationRegistry)
+    registry._table = FakeTable()
+
+    released = registry.release_stale_uncertain_reservations(limit=1, grace_seconds=60)
+
+    assert [record.investigation_id for record in released] == ["investigation1"]
+    assert registry._table.operations[0][1]["active_count"] == 0
+    assert registry._table.operations[0][2]["etag"] == "counter-etag"
+    assert registry._table.operations[1][1]["reservation_state"] == "failed"
+    assert registry._table.operations[1][2]["etag"] == "reservation-etag"
+
+
 def test_table_findings_metadata_applies_finalized_retention():
     class FakeTable:
         def __init__(self):
@@ -2516,6 +2565,55 @@ async def test_terminal_reconciler_releases_completed_investigation(registry):
     record = registry.get_investigation(investigation_id, "oid1", "appid1")
     assert record.reservation_state == "completed"
     event.assert_any_call("investigation_reconciled", investigation_id=investigation_id, outcome="completed")
+
+
+def test_registry_releases_stale_uncertain_reservation_without_deleting_idempotency_key(registry):
+    reservation = registry.reserve_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        severity="high",
+        maximum_investigations=1,
+        idempotency_key="uncertain-request",
+        request_fingerprint="fingerprint-1",
+    )
+    registry._registry[reservation.investigation_id].created_at = time.time() - 61
+
+    released = registry.release_stale_uncertain_reservations(limit=1, grace_seconds=60)
+
+    assert [record.investigation_id for record in released] == [reservation.investigation_id]
+    retained = registry.find_by_idempotency_key("appid1", "uncertain-request")
+    assert retained is not None
+    assert retained.reservation_state == "failed"
+    registry.check_workload_quota("appid1", maximum_investigations=1)
+
+
+@pytest.mark.asyncio
+async def test_uncertain_terminal_status_does_not_call_platform_with_empty_thread_id(registry):
+    reservation = registry.reserve_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="workload-a",
+        workload_identity_appid="appid1",
+        severity="high",
+        maximum_investigations=1,
+        idempotency_key="uncertain-request",
+        request_fingerprint="fingerprint-1",
+    )
+    registry._registry[reservation.investigation_id].created_at = time.time() - 61
+    registry.release_stale_uncertain_reservations(limit=1, grace_seconds=60)
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main._caller_policy_store.authorize", return_value=MagicMock()),
+        patch("main._platform_request", new_callable=AsyncMock) as platform_request,
+    ):
+        result = await _get_status_impl(GetInvestigationRequest(investigation_id=reservation.investigation_id), caller)
+
+    assert result == {"investigation_id": reservation.investigation_id, "status": "failed", "progress": ""}
+    platform_request.assert_not_awaited()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -41,6 +41,7 @@ param (
     [ValidateRange(5, 86400)] [int] $ReconciliationIntervalSeconds = 60,
     [ValidateRange(1, 100)] [int] $MaxReconciliationsPerSweep = 10,
     [ValidateRange(1, 86400)] [int] $ReconciliationLeaseSeconds = 55,
+    [ValidateRange(60, 86400)] [int] $UncertainReservationGraceSeconds = 900,
     [ValidateRange(1, 100)] [int] $MaxConcurrentBlockingSdkCalls = 16,
     [ValidateRange(1, 100)] [int] $MaxConcurrentPlatformRequests = 16,
     [ValidateRange(0.01, 30)] [double] $PlatformRequestQueueTimeoutSeconds = 0.25,
@@ -405,6 +406,7 @@ $deployOutputJson = az deployment group create `
         reconciliationIntervalSeconds=$ReconciliationIntervalSeconds `
         maxReconciliationsPerSweep=$MaxReconciliationsPerSweep `
         reconciliationLeaseSeconds=$ReconciliationLeaseSeconds `
+        uncertainReservationGraceSeconds=$UncertainReservationGraceSeconds `
         maxConcurrentBlockingSdkCalls=$MaxConcurrentBlockingSdkCalls `
         maxConcurrentPlatformRequests=$MaxConcurrentPlatformRequests `
         platformRequestQueueTimeoutSeconds=$($PlatformRequestQueueTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture)) `

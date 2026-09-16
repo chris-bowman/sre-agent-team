@@ -88,6 +88,12 @@ class InvestigationRegistry(Protocol):
         lease_seconds: float,
     ) -> list[InvestigationRecord]: ...
 
+    def release_stale_uncertain_reservations(
+        self,
+        limit: int,
+        grace_seconds: float,
+    ) -> list[InvestigationRecord]: ...
+
 
 class PlatformResponse(Protocol):
     status_code: int
@@ -265,8 +271,13 @@ class InvestigationService:
                 )
                 return {
                     "investigation_id": existing.investigation_id,
-                    "status": "pending",
-                    "message": "Investigation already exists for this idempotency key.",
+                    "status": "failed" if existing.reservation_state == "failed" else "pending",
+                    "message": (
+                        "The earlier investigation outcome could not be confirmed; use a new idempotency key "
+                        "for another attempt."
+                        if existing.reservation_state == "failed" and not existing.platform_thread_id
+                        else "Investigation already exists for this idempotency key."
+                    ),
                 }
 
         correlation_id = str(self._uuid_factory())
@@ -453,6 +464,8 @@ class InvestigationService:
             record = await self._run_sync(
                 self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
             )
+            if record.reservation_state == "failed" and not record.platform_thread_id:
+                return {"investigation_id": req.investigation_id, "status": "failed", "progress": ""}
             await self._run_sync(self._registry.record_status_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             status_code = 403 if "Unauthorized" in str(exc) else 429
@@ -484,6 +497,8 @@ class InvestigationService:
             record = await self._run_sync(
                 self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
             )
+            if record.reservation_state == "failed" and not record.platform_thread_id:
+                raise HTTPException(status_code=409, detail="Investigation outcome could not be confirmed")
             await self._run_sync(self._registry.record_summary_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             if "Unauthorized" in str(exc):

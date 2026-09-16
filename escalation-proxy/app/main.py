@@ -156,6 +156,10 @@ EXPIRY_CLEANUP_INTERVAL_SECONDS = max(float(os.environ.get("EXPIRY_CLEANUP_INTER
 RECONCILIATION_INTERVAL_SECONDS = max(float(os.environ.get("RECONCILIATION_INTERVAL_SECONDS", "60")), 5.0)
 MAX_RECONCILIATIONS_PER_SWEEP = max(int(os.environ.get("MAX_RECONCILIATIONS_PER_SWEEP", "10")), 1)
 RECONCILIATION_LEASE_SECONDS = max(float(os.environ.get("RECONCILIATION_LEASE_SECONDS", "55")), 1.0)
+UNCERTAIN_RESERVATION_GRACE_SECONDS = max(
+    float(os.environ.get("UNCERTAIN_RESERVATION_GRACE_SECONDS", "900")),
+    1.0,
+)
 # Long-polling: a single get_investigation_status call can block server-side and
 # Long-polling: a single get_investigation_status call can block server-side and
 # recheck the platform thread internally, so the calling agent rarely needs a
@@ -661,6 +665,17 @@ async def _run_terminal_reconciliation() -> None:
     """Release caller quota for platform threads that finish after callers stop polling."""
     while True:
         try:
+            uncertain_records = await _run_blocking_sdk_call(
+                _investigation_registry.release_stale_uncertain_reservations,
+                MAX_RECONCILIATIONS_PER_SWEEP,
+                UNCERTAIN_RESERVATION_GRACE_SECONDS,
+            )
+            for record in uncertain_records:
+                log_event(
+                    "investigation_uncertain_creation_released",
+                    investigation_id=record.investigation_id,
+                    outcome="failed",
+                )
             records = await _run_blocking_sdk_call(
                 _investigation_registry.claim_reconcilable_investigations,
                 MAX_RECONCILIATIONS_PER_SWEEP,

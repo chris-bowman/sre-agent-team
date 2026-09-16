@@ -20,6 +20,8 @@
 - `/health/live`, `/health/ready`, and `/mcp/` returned `200` after deployment.
 - Twelve independent readiness samples returned `200` in 1.04 to 1.65 seconds. The Container Apps readiness timeout is 20 seconds and the application deadline is 15 seconds.
 - Recent proxy logs contained no `ERROR`, `Traceback`, readiness failure, caller-policy refresh failure, or reconciliation failure events.
+- Under a temporary WorkloadApp quota of one, `eac6c7a7-1203-431e-890a-ca2f2fae945d` was admitted and intentionally left unpolled. The proxy's background worker observed it as running on four one-minute sweeps, detected completion at `2026-09-16T02:37:43Z`, and emitted `investigation_reconciled` without any caller status or summary request. A subsequent WorkloadApp investigation, `e9c58ed3-da3e-44ed-b5e3-1b8034b0bb38`, was admitted under the same quota, proving the terminal slot was automatically reusable. WorkloadApp quota was restored to ten through an ETag-protected private App Configuration update.
+- WorkloadIsolation's policy was disabled while its existing `EscalationCaller` Entra assignment remained intact. After the proxy loaded the disabled snapshot, its create request returned the expected safe `403` caller-policy denial. The policy was then re-enabled through the same private ETag-protected path; `3f6027af-67c7-4e26-ad96-2ec27721be99` was admitted immediately afterward, proving recovery without an Entra role change.
 
 ## Remediated Candidate Controls
 

@@ -352,7 +352,7 @@ $callerPolicy = @($policies | Where-Object appid -eq $callerServicePrincipal.app
 } else {
     @()
 }
-if ($Operation -eq 'Grant' -and ($null -eq $callerPolicy -or $UpdateExistingPolicy) -and $resolvedAllowedResourceGroups.Count -eq 0) {
+if ($Operation -eq 'Grant' -and -not $SkipPolicyUpdate -and ($null -eq $callerPolicy -or $UpdateExistingPolicy) -and @($resolvedAllowedResourceGroups).Count -eq 0) {
     throw 'AllowedResourceGroup is required when enabling a caller policy. Pass one or more workload-owned resource group names or canonical IDs.'
 }
 

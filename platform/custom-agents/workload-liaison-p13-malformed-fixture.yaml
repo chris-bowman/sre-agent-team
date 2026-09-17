@@ -31,4 +31,4 @@ spec:
     For every other request, return only: `Fixture marker required.`
   agent_type: Autonomous
   handoffs: []
-  enable_skills: false
+  enable_skills: true

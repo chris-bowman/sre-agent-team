@@ -2161,6 +2161,44 @@ def test_v1_findings_rejects_malformed_completed_report():
     assert response.json()["code"] == "invalid_platform_response"
 
 
+def test_v1_findings_rejects_invalid_final_markdown_without_report_disclosure():
+    client = TestClient(app)
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    malformed_report = """## Platform Investigation Findings
+
+### Root Cause
+P13_MALFORMED_REPORT_FIXTURE_20260917
+
+### Evidence
+- Synthetic evidence only.
+
+### Recommended Actions
+1. No action required.
+
+### Verdict
+INVALID VERDICT
+
+FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
+    with patch("main.extract_and_validate_token", return_value=("ignored", caller)):
+        with patch("main._get_summary_impl", new_callable=AsyncMock) as summary_impl:
+            summary_impl.return_value = {
+                "investigation_id": "f57afdb4-348f-40aa-b29d-886f4bce5332",
+                "status": "completed",
+                "summary": malformed_report,
+            }
+            response = client.get(
+                "/api/v1/investigations/f57afdb4-348f-40aa-b29d-886f4bce5332/findings",
+                headers={"Authorization": "Bearer ignored"},
+            )
+
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "invalid_platform_response"
+    assert "P13_MALFORMED_REPORT_FIXTURE_20260917" not in response.text
+    assert "INVALID VERDICT" not in response.text
+    assert "Synthetic evidence only" not in response.text
+
+
 def test_readiness_check_reports_dependency_failure_without_details():
     client = TestClient(app)
     with patch("main.get_platform_agent_token", side_effect=RuntimeError("secret platform detail")):

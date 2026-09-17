@@ -58,7 +58,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL || 'https://pypi.org/simple' }}
       PLATFORM_AGENT_ENDPOINT: http://localhost
       ENTRA_TENANT_ID: test-tenant
       ENTRA_CLIENT_ID: test-client
@@ -95,7 +95,7 @@ jobs:
     name: Post-assessment regressions
     runs-on: ubuntu-latest
     env:
-      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL || 'https://pypi.org/simple' }}
       PLATFORM_AGENT_ENDPOINT: http://localhost
       ENTRA_TENANT_ID: test-tenant
       ENTRA_CLIENT_ID: test-client
@@ -128,7 +128,7 @@ jobs:
   image-scan:
     runs-on: ubuntu-latest
     env:
-      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+      PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL || 'https://pypi.org/simple' }}
     defaults:
       run:
         working-directory: escalation-proxy/app

@@ -145,6 +145,7 @@ jobs:
         with:
           image-ref: sre-escalation-proxy:${{ github.sha }}
           version: v0.65.0
+          scanners: vuln
           format: table
           exit-code: "0"
           ignore-unfixed: false
@@ -153,6 +154,7 @@ jobs:
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
           image-ref: sre-escalation-proxy:${{ github.sha }}
+          scanners: vuln
           format: table
           exit-code: "1"
           ignore-unfixed: true

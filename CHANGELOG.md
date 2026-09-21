@@ -2,35 +2,7 @@
 
 All notable changes to this project are documented here. The project follows Keep a Changelog conventions and Semantic Versioning.
 
-## [Unreleased]
-
-### Added
-
-- App Configuration-backed per-caller resource-group allowlists with one required scope per investigation.
-- Bounded offloading for JWT/JWKS, managed identity, App Configuration, and Table SDK calls, plus bounded Platform SRE Agent request admission.
-- Cached and coalesced readiness dependency checks to prevent public probe amplification.
-- Persisted summary polling limits plus explicit platform-response and message-processing bounds.
-- Private App Configuration networking for the production Table profile: Standard tier, private endpoint, `privatelink.azconfig.io` DNS, and disabled public access.
-
-### Changed
-
-- The private Platform SRE Agent liaison report is a strict finalized Markdown contract; the proxy validates it and projects the separate stable caller-safe JSON findings contract for MCP and HTTP consumers.
-- Routine proxy deployment preserves an existing private App Configuration policy without requiring public workstation data-plane access.
-
-### Fixed
-
-- App Configuration policy reads now use bounded transport timeouts, preventing blocked readiness work from exhausting proxy workers.
-- Finalized liaison reports are recognized from platform-thread messages even when the platform thread retains a stale `running` status.
-- The caller-facing `correlation_id` on v1 error responses tied to an existing investigation now matches that investigation's own correlation ID (previously a new random ID was minted per error, unrelated to anything in telemetry).
-- The caller-policy store no longer performs a synchronous Azure App Configuration call during process startup; a slow or failing first call could previously delay both liveness and readiness rather than just readiness.
-
-### Security
-
-- Platform-owned findings are reduced to a caller-safe platform-team handoff.
-- All verdicts now use fixed proxy-authored caller responses; model-generated diagnostic text remains in the platform-owned thread.
-- The runtime image now uses a pinned, patched Alpine base. The exact deployed candidate digest has zero HIGH/CRITICAL Trivy findings and the pinned Python dependency graph passes `pip-audit`.
-
-## [1.0.0] - 2026-09-11
+## [1.0.0] - 2026-09-21
 
 ### Added
 
@@ -43,19 +15,34 @@ All notable changes to this project are documented here. The project follows Kee
 - Azure App Configuration-backed dynamic caller policy with managed-identity access, ETag updates, revision metadata, last-known-good caching, and fail-closed staleness handling.
 - Standalone read-only deployment prerequisite validation for tooling, Azure permissions, providers, regional availability, networking features, ACR, and Bicep.
 - Repository governance and production operations guidance.
+- App Configuration-backed per-caller resource-group allowlists with one required scope per investigation.
+- Bounded offloading for JWT/JWKS, managed identity, App Configuration, and Table SDK calls, plus bounded Platform SRE Agent request admission.
+- Cached and coalesced readiness dependency checks to prevent public probe amplification.
+- Persisted summary polling limits plus explicit platform-response and message-processing bounds.
+- Private App Configuration networking for the production Table profile: Standard tier, private endpoint, `privatelink.azconfig.io` DNS, and disabled public access.
 
 ### Changed
 
 - Deployments preserve the Entra audience and caller grants, resolve container tags to immutable image digests, and keep Entra bootstrap separate from routine proxy deployment.
 - Investigation findings use a versioned structured schema and redact credential-shaped or platform-internal values.
+- The private Platform SRE Agent liaison report is a strict finalized Markdown contract; the proxy validates it and projects the separate stable caller-safe JSON findings contract for MCP and HTTP consumers.
+- Routine proxy deployment preserves an existing private App Configuration policy without requiring public workstation data-plane access.
 
 ### Fixed
 
 - Managed-identity token validation and fresh-tenant deployment behavior, including empty initial app-role assignments and Windows ACR build log handling.
 - Table registry lifecycle races involving ETags, terminal quota release, restart recovery, and multi-replica access.
+- App Configuration policy reads now use bounded transport timeouts, preventing blocked readiness work from exhausting proxy workers.
+- Finalized liaison reports are recognized from platform-thread messages even when the platform thread retains a stale `running` status.
+- The caller-facing `correlation_id` on v1 error responses tied to an existing investigation now matches that investigation's own correlation ID (previously a new random ID was minted per error, unrelated to anything in telemetry).
+- The caller-policy store no longer performs a synchronous Azure App Configuration call during process startup; a slow or failing first call could previously delay both liveness and readiness rather than just readiness.
 
 ### Security
 
 - Dynamic caller-policy changes no longer require Container App revisions.
 - Empty or unavailable dynamic policy denies callers while static empty configuration remains available for local development.
 - Caller identity, ownership, severity, quota, idempotency, disabled/revoked access, and cross-caller isolation are enforced consistently across MCP and HTTP transports.
+- Platform-owned findings are reduced to a caller-safe platform-team handoff.
+- All verdicts now use fixed proxy-authored caller responses; model-generated diagnostic text remains in the platform-owned thread.
+- The runtime image now uses a pinned, patched Alpine base. The exact deployed candidate digest has zero HIGH/CRITICAL Trivy findings and the pinned Python dependency graph passes `pip-audit`.
+

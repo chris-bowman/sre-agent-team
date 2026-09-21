@@ -591,6 +591,8 @@ Candidate commit `f37210f`; image digest `sha256:f543f5ca2fd310f0112a31d53e48dad
 
 **Residual limitations carried forward, not blocking:** F13's fix has live log evidence for the startup-ordering half of this session's work but no fresh live malformed-response run against the fixed code (would require redeploying the malformed-platform-stub again); the unit regression is deterministic and exercises the exact same code path, so this is a documentation gap rather than an open functional risk. No destructive production probes were used at any point.
 
+**Post-closure real end-to-end smoke test (2026-09-21):** with both agents resumed, `sre-srelab` was driven directly (not a stub) via its own threads API with a synthetic "storefront 502s, suspected platform issue" scenario. It delegated to the `platform-escalation` connector, which created and completed a real investigation on `sre-platform` through the candidate proxy (investigation `012803d1-704d-41d4-bd22-028ab5e96385`): verdict `PLATFORM ISSUE`, no raw findings disclosed, proxy telemetry confirms `findings_schema_valid: true`. This is a genuine caller-to-platform-agent round trip on the exact deployed candidate digest, not a stub or unit test, and further corroborates the closure record above. Both agents and the proxy were returned to their stopped/zero-replica baseline afterward.
+
 ### Post-Assessment Release Gate
 
 Broader rollout is recommended only after this gate passes. Package task completion requires recorded evidence; explicit risk acceptance is required for any residual deployment/image risk, not an unchecked assumption.

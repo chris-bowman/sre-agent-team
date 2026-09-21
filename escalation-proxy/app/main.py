@@ -343,6 +343,8 @@ async def versioned_problem_details(request: Request, exc: HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
 
     code, title, retryable = _V1_PROBLEM_CODES.get(exc.status_code, ("internal_error", "Service request failed", False))
+    correlation_id = getattr(exc, "correlation_id", None) or str(uuid.uuid4())
+    log_event("v1_error_response", code=code, status_code=exc.status_code, correlation_id=correlation_id)
     return JSONResponse(
         status_code=exc.status_code,
         media_type="application/problem+json",
@@ -352,7 +354,7 @@ async def versioned_problem_details(request: Request, exc: HTTPException):
             "status": exc.status_code,
             "code": code,
             "detail": title,
-            "correlation_id": str(uuid.uuid4()),
+            "correlation_id": correlation_id,
             "retryable": retryable,
         },
     )

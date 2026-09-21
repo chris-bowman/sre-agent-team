@@ -147,13 +147,14 @@ class RefreshingCallerPolicyStore:
         self._clock = clock
         self._store: CallerPolicyStore | None = None
         self._etag: Any = None
-        self._last_refresh_attempt = 0.0
+        # -inf guarantees the first refresh() call always attempts a fetch regardless of
+        # refresh_interval_seconds, even if the monotonic clock starts near zero.
+        self._last_refresh_attempt = float("-inf")
         self._last_success = 0.0
         self._lock = Lock()
-        try:
-            self.refresh(force=True)
-        except ValueError:
-            pass
+        # No eager fetch here: this constructor runs during process/module startup, before the
+        # ASGI server binds its port, so any network call here would block liveness too, not just
+        # readiness. The first refresh happens lazily on first use (readiness probe or request).
 
     def refresh(self, force: bool = False) -> float:
         with self._lock:

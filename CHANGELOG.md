@@ -21,6 +21,8 @@ All notable changes to this project are documented here. The project follows Kee
 
 - App Configuration policy reads now use bounded transport timeouts, preventing blocked readiness work from exhausting proxy workers.
 - Finalized liaison reports are recognized from platform-thread messages even when the platform thread retains a stale `running` status.
+- The caller-facing `correlation_id` on v1 error responses tied to an existing investigation now matches that investigation's own correlation ID (previously a new random ID was minted per error, unrelated to anything in telemetry).
+- The caller-policy store no longer performs a synchronous Azure App Configuration call during process startup; a slow or failing first call could previously delay both liveness and readiness rather than just readiness.
 
 ### Security
 

@@ -14,6 +14,7 @@ from contracts import (
     GetInvestigationRequest,
     InvestigationFindings,
     InvestigationFindingsResponse,
+    InvestigationHTTPException,
     InvestigationLifecycleResponse,
     RedactedSummaryResponse,
 )
@@ -262,7 +263,11 @@ class InvestigationService:
                         caller_appid=caller.appid,
                         investigation_id=existing.investigation_id,
                     )
-                    raise HTTPException(status_code=409, detail="Idempotency key was used with a different request")
+                    raise InvestigationHTTPException(
+                        status_code=409,
+                        detail="Idempotency key was used with a different request",
+                        correlation_id=existing.request_correlation_id,
+                    )
                 self._event_sink(
                     "idempotency_replayed",
                     outcome="replayed",
@@ -298,7 +303,7 @@ class InvestigationService:
                 policy_maximum_severity=caller_policy.maximum_severity,
             )
         except IdempotencyConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise InvestigationHTTPException(status_code=409, detail=str(exc), correlation_id=correlation_id) from exc
         except ValueError as exc:
             self._event_sink(
                 "investigation_admission_denied",
@@ -362,7 +367,11 @@ class InvestigationService:
 
             thread_id = data.get("id")
             if not thread_id:
-                raise HTTPException(status_code=502, detail="Platform thread creation response missing id")
+                raise InvestigationHTTPException(
+                    status_code=502,
+                    detail="Platform thread creation response missing id",
+                    correlation_id=correlation_id,
+                )
 
             await self._run_sync(self._registry.finalize_reservation, investigation_id, caller.appid, thread_id)
         except Exception:
@@ -464,12 +473,17 @@ class InvestigationService:
             record = await self._run_sync(
                 self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
             )
-            if record.reservation_state == "failed" and not record.platform_thread_id:
-                return {"investigation_id": req.investigation_id, "status": "failed", "progress": ""}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Investigation not found") from exc
+        if record.reservation_state == "failed" and not record.platform_thread_id:
+            return {"investigation_id": req.investigation_id, "status": "failed", "progress": ""}
+        try:
             await self._run_sync(self._registry.record_status_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             if "rate limit" in str(exc) or "maximum status polls" in str(exc):
-                raise HTTPException(status_code=429, detail=str(exc)) from exc
+                raise InvestigationHTTPException(
+                    status_code=429, detail=str(exc), correlation_id=record.request_correlation_id
+                ) from exc
             raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
         wait_budget = max(0, min(req.wait_seconds, self._config.max_status_wait_seconds))
@@ -498,12 +512,21 @@ class InvestigationService:
             record = await self._run_sync(
                 self._registry.get_investigation, req.investigation_id, caller.oid, caller.appid
             )
-            if record.reservation_state == "failed" and not record.platform_thread_id:
-                raise HTTPException(status_code=409, detail="Investigation outcome could not be confirmed")
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Investigation not found") from exc
+        if record.reservation_state == "failed" and not record.platform_thread_id:
+            raise InvestigationHTTPException(
+                status_code=409,
+                detail="Investigation outcome could not be confirmed",
+                correlation_id=record.request_correlation_id,
+            )
+        try:
             await self._run_sync(self._registry.record_summary_poll, req.investigation_id, caller.oid, caller.appid)
         except ValueError as exc:
             if "rate limit" in str(exc) or "maximum summary polls" in str(exc):
-                raise HTTPException(status_code=429, detail=str(exc)) from exc
+                raise InvestigationHTTPException(
+                    status_code=429, detail=str(exc), correlation_id=record.request_correlation_id
+                ) from exc
             raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
         platform_token = await self._run_sync(self._get_platform_agent_token)
@@ -539,7 +562,11 @@ class InvestigationService:
                 investigation_id=req.investigation_id,
                 report_format=self._finalized_report_format(redacted_report),
             )
-            raise HTTPException(status_code=502, detail="Platform findings did not satisfy the required report format")
+            raise InvestigationHTTPException(
+                status_code=502,
+                detail="Platform findings did not satisfy the required report format",
+                correlation_id=record.request_correlation_id,
+            )
         status = "completed"
 
         self._event_sink(

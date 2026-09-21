@@ -56,6 +56,7 @@ def test_refreshing_policy_store_uses_last_known_good_within_staleness_window():
         client=client,
         clock=clock,
     )
+    store.health_check()
 
     assert store.authorize("caller", "high").maximum_concurrent_investigations == 2
     events.assert_any_call(
@@ -84,6 +85,7 @@ def test_refreshing_policy_store_fails_closed_after_maximum_staleness():
         client=client,
         clock=clock,
     )
+    store.health_check()
 
     with pytest.raises(ValueError, match="Caller policy is unavailable"):
         store.authorize("caller", "high")
@@ -107,6 +109,7 @@ def test_refreshing_policy_store_rejects_expired_snapshot_after_throttled_failed
         client=client,
         clock=clock,
     )
+    store.health_check()
 
     with pytest.raises(ValueError, match="Caller policy is unavailable"):
         store.authorize("caller", "low")
@@ -197,3 +200,22 @@ def test_dynamic_policy_health_accepts_last_known_good_snapshot():
     )
 
     store.health_check()
+    store.health_check()
+
+
+def test_refreshing_policy_store_constructor_does_not_perform_network_io():
+    client = MagicMock()
+
+    RefreshingCallerPolicyStore(
+        endpoint="https://config.example",
+        key="policy",
+        label="production",
+        default_quota=2,
+        refresh_interval_seconds=30,
+        maximum_staleness_seconds=300,
+        event_sink=MagicMock(),
+        client=client,
+        clock=MagicMock(return_value=10.0),
+    )
+
+    client.get_configuration_setting.assert_not_called()

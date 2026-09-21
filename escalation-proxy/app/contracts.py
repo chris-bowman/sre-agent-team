@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 CONTRACT_SCHEMA_VERSION: Literal["1.0"] = "1.0"
@@ -11,6 +12,14 @@ LIAISON_REPORT_SCHEMA_VERSION: Literal["1.0"] = "1.0"
 InvestigationStatus = Literal["pending", "running", "completed", "failed", "expired"]
 Severity = Literal["low", "medium", "high", "critical"]
 LiaisonVerdict = Literal["PLATFORM_ISSUE", "APPLICATION_ISSUE", "INCONCLUSIVE"]
+
+
+class InvestigationHTTPException(HTTPException):
+    """HTTPException that carries an investigation's correlation ID for traceable error responses."""
+
+    def __init__(self, status_code: int, detail: str, correlation_id: str | None = None) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.correlation_id = correlation_id
 
 
 class ContractModel(BaseModel):

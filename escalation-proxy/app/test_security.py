@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from contracts import InvestigationHTTPException
 from investigation_service import InvestigationService
 from main import (
     ACTIVE_METADATA_RETENTION_SECONDS,
@@ -1138,6 +1139,36 @@ FINALIZATION_TOKEN: ESCALATION_FINAL_V1"""
     assert record.findings_schema_valid
     assert record.findings_selection_strategy == "best_structured_message"
     assert record.findings_redacted
+
+
+@pytest.mark.asyncio
+async def test_get_summary_malformed_report_error_carries_investigation_correlation_id(registry):
+    """Regression for F13: an error tied to an existing investigation must expose its own correlation ID."""
+    caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
+    investigation_id = registry.create_investigation(
+        caller_oid="oid1",
+        caller_appid="appid1",
+        workload_name="consumer",
+        workload_identity_appid="appid1",
+        platform_thread_id="thread1",
+        severity="high",
+    )
+    record = registry.get_investigation(investigation_id, "oid1", "appid1")
+    platform_response = MagicMock(
+        status_code=200,
+        json=lambda: {"value": [{"author": {"role": "SREAgent"}, "text": "FINALIZATION_TOKEN: ESCALATION_FINAL_V1"}]},
+    )
+
+    with (
+        patch("main._investigation_registry", registry),
+        patch("main.get_platform_agent_token", return_value="platform-token"),
+        patch("main._platform_request", AsyncMock(return_value=platform_response)),
+    ):
+        with pytest.raises(InvestigationHTTPException) as exc_info:
+            await _get_summary_impl(GetInvestigationRequest(investigation_id=investigation_id), caller)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.correlation_id == record.request_correlation_id
 
 
 @pytest.mark.parametrize(

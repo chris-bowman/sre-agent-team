@@ -1227,7 +1227,7 @@ def test_reservation_counts_against_quota_before_platform_thread_creation(regist
 
 
 @pytest.mark.asyncio
-async def test_creation_uses_one_correlation_id_for_registry_and_platform_message(registry):
+async def test_creation_includes_investigation_and_correlation_ids_in_platform_message(registry):
     caller = CallerIdentity({"appid": "appid1", "oid": "oid1", "roles": ["EscalationCaller"]})
     request = CreateInvestigationRequest(
         description="Investigate platform issue",
@@ -1255,6 +1255,7 @@ async def test_creation_uses_one_correlation_id_for_registry_and_platform_messag
     record = registry.get_investigation(result["investigation_id"], "oid1", "appid1")
     message = platform_request.await_args.kwargs["json"]["StartMessage"]["Text"]
     assert message.startswith("/agent workload_liaison\n")
+    assert f"Investigation ID: {result['investigation_id']}" in message
     assert f"Correlation ID: {record.request_correlation_id}" in message
     assert message.count("Correlation ID:") == 1
     assert record.platform_thread_id == "private-thread-id"
